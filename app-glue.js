@@ -180,7 +180,12 @@
     if (reg.length && FXC.data && FXC.data.parseJobMarkdown) {
       reg.slice().reverse().forEach(function (entry) {  // reverse so registry order is preserved at the front
         try {
-          var j = FXC.data.parseJobMarkdown(entry.md, entry.path, "demo");
+          // demo-only: 2813 becomes an ACTIVE mid-application job so the Ghost-Row
+          // capture loop (active-phase only) is walkable in ?demo=1. Built with the
+          // REAL engine (appendReading/appendProduct) — no hand-written table rows.
+          var j = /job_number:\s*2813\b/.test(entry.md)
+            ? demoActiveJob(entry.md)
+            : FXC.data.parseJobMarkdown(entry.md, entry.path, "demo");
           if (entry.photos && entry.photos.length) {
             j.photoUrls = entry.photos;
             j.cover = entry.photos[0];
@@ -191,6 +196,43 @@
       });
     }
     return jobs;
+  }
+
+  function pad2(n) { n = String(n); return n.length < 2 ? "0" + n : n; }
+  function daysAgo(n) { var t = new Date(); t.setDate(t.getDate() - n); return t.getFullYear() + "-" + pad2(t.getMonth() + 1) + "-" + pad2(t.getDate()); }
+  function clearDemoGates(md) {
+    var lines = md.split("\n"), phase = null, ag = 0;
+    for (var i = 0; i < lines.length; i++) {
+      var t = lines[i].trim();
+      if (t === "### PLANNING") { phase = "P"; continue; }
+      if (t === "### ACTIVE") { phase = "A"; ag = 0; continue; }
+      if (t === "### CLOSEOUT") { phase = "C"; continue; }
+      if (phase === "A" && /^\*\*/.test(t)) ag++;
+      if (/^(\s*)- \[ \]/.test(lines[i]) && (phase === "P" || (phase === "A" && ag <= 2))) {
+        lines[i] = lines[i].replace("- [ ]", "- [x]");
+      }
+    }
+    return lines.join("\n");
+  }
+  /* transform the 2813 record into an ACTIVE Day-2 job + seed a couple in-spec
+     readings (dated 1–2 days back) so the last-reading strip reads neutral and the
+     ghost prefills from a real prior row. Brad's own out-of-spec save then flips it. */
+  function demoActiveJob(md) {
+    var text = md
+      .replace(/^status:.*$/m, "status: applying")
+      .replace(/^phase:.*$/m, "phase: 2-active")
+      .replace(/^start_date:.*$/m, "start_date: " + daysAgo(2))
+      .replace(/^crew:.*$/m, "crew: [Mike, Tomas, Dylan]");
+    text = clearDemoGates(text);
+    var path = "10-jobs/2-active/2813-PF-JD Renovations.md";
+    var job = FXC.data.parseJobMarkdown(text, path, "demo");
+    var apply = function (res) { job = FXC.data.parseJobMarkdown(res.newText, path, "demo"); };
+    [
+      { date: daysAgo(2), area: "Slab A - floor", moisture: "3.8", temp: "17", RH: "74", CSP: "3", notes: "prep verified, CSP 3 confirmed" },
+      { date: daysAgo(1), area: "Slab A - floor", moisture: "3.5", temp: "18", RH: "70", CSP: "3", batch: "288-A-2207", dft: "12.0 mils", notes: "base coat + flake broadcast" }
+    ].forEach(function (r) { apply(FXC.data.appendReading(job, r)); });
+    apply(FXC.data.appendProduct(job, { product: "Series 288 Enviro-Pox (Aluminum Gray)", qty: "9 kits (27 gal)", notes: "primer + base to date" }));
+    return job;
   }
 
   /* #card=<job#> deep link (written by the card's "⧉ Copy link" button): open that

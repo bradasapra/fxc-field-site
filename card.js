@@ -210,6 +210,40 @@
     '.capbar{display:flex;gap:8px;margin:14px 6px 4px;}',
     '.capbtn{flex:1;min-height:48px;display:flex;align-items:center;justify-content:center;gap:5px;border-radius:13px;font-size:12px;font-weight:800;color:var(--ink);background:#fafafa;border:1px solid var(--line);}',
     '.capbtn.primary{background:linear-gradient(100deg,var(--fx1),var(--fx2),var(--fx3));color:#fff;border:none;box-shadow:0 2px 6px rgba(171,84,145,.3);}',
+    /* --- last-reading strip (Feature B) --- */
+    '.capstrip{display:flex;align-items:center;gap:8px;margin:14px 6px 4px;padding:9px 12px;border-radius:12px;background:#f6f6f7;border:1px solid var(--line);font-size:11.5px;font-weight:700;color:var(--sec);cursor:pointer;}',
+    '.capstrip .dotm{width:8px;height:8px;border-radius:50%;background:var(--good);flex:0 0 auto;}',
+    '.capstrip .cslab{color:var(--lab);letter-spacing:.08em;text-transform:uppercase;font-size:9px;}',
+    '.capstrip .csval{color:var(--ink);}',
+    '.capstrip.alarm{background:#fdecec;border-color:#f4b6b6;color:#8f2020;}',
+    '.capstrip.alarm .dotm{background:#d64545;}',
+    /* --- ghost capture form (Feature A) --- */
+    '.capov{position:fixed;inset:0;z-index:60;background:rgba(20,19,22,.5);display:flex;align-items:flex-end;justify-content:center;}',
+    '.capov[hidden]{display:none;}',
+    '.capcard{width:100%;max-width:480px;max-height:92vh;overflow-y:auto;background:#fff;border-radius:18px 18px 0 0;padding:16px 16px 22px;box-shadow:0 -6px 30px rgba(0,0,0,.28);}',
+    '.caphead{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;}',
+    '.caphead .capt{font-size:15px;font-weight:800;color:var(--ink);}',
+    '.capx{width:34px;height:34px;border-radius:10px;border:1px solid var(--line);background:#fafafa;font-size:14px;color:var(--sec);font-family:inherit;cursor:pointer;}',
+    '.capfield{margin-bottom:12px;}',
+    '.capfield > label{display:block;font-size:9.5px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--lab);margin-bottom:5px;}',
+    '.capfield input,.capfield textarea{width:100%;padding:11px 12px;font-size:16px;border:1px solid var(--line);border-radius:11px;background:#fff;color:var(--ink);font-family:inherit;}',
+    '.capfield textarea{min-height:52px;resize:vertical;}',
+    '.capchips{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px;}',
+    '.capchip{padding:7px 12px;min-height:38px;border-radius:10px;border:1px solid var(--line);background:#fafafa;font-size:12.5px;font-weight:700;color:var(--sec);font-family:inherit;cursor:pointer;}',
+    '.capchip.on{background:linear-gradient(100deg,var(--fx1),var(--fx3));color:#fff;border-color:transparent;}',
+    '.capchips.csp .capchip{min-width:42px;justify-content:center;text-align:center;}',
+    '.capsteppers{display:flex;gap:8px;margin-bottom:12px;}',
+    '.capstep{flex:1;border:1px solid var(--line);border-radius:12px;padding:9px 6px;text-align:center;background:#fff;}',
+    '.capstep > label{display:block;font-size:9px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--lab);margin-bottom:5px;}',
+    '.stepline{display:flex;align-items:center;justify-content:space-between;gap:4px;}',
+    '.stepbtn{width:38px;height:38px;flex:0 0 auto;border-radius:11px;border:1px solid var(--line);background:#fafafa;font-size:20px;font-weight:800;color:var(--fx2);font-family:inherit;line-height:1;cursor:pointer;}',
+    '.stepval{font-size:18px;font-weight:800;color:var(--ink);letter-spacing:-.02em;white-space:nowrap;}',
+    '.stepval .u{font-size:10px;color:var(--lab);font-weight:700;margin-left:1px;}',
+    '.capverdict{margin:0 0 12px;padding:10px 12px;border-radius:11px;font-size:12.5px;font-weight:800;text-align:center;}',
+    '.capverdict.ok{background:var(--goodbg);color:var(--good);border:1px solid rgba(20,133,79,.3);}',
+    '.capverdict.bad{background:#fdecec;color:#a11;border:1px solid #f4b6b6;}',
+    '.capsave{width:100%;min-height:52px;border:none;border-radius:13px;background:linear-gradient(100deg,var(--fx1),var(--fx2),var(--fx3));color:#fff;font-size:15px;font-weight:800;font-family:inherit;box-shadow:0 2px 8px rgba(171,84,145,.3);cursor:pointer;}',
+    '.capfoot{text-align:center;font-size:11px;color:var(--good);font-weight:700;margin-top:9px;min-height:14px;}',
     '.capnote{text-align:center;font-size:9.5px;color:var(--lab);font-weight:600;margin:7px 6px 2px;letter-spacing:.02em;}'
   ].join("");
 
@@ -656,14 +690,217 @@
   /* spec-limit gauges (>temp / <RH / MVT), parsed from the Conditions prose.
      Rendered inside the Conditions section above the blue box — no longer its own
      standalone tile (Brad 2026-07-02: killed the duplicate "Spec limits" tile). */
+  /* pure spec-limit parser (exported, node-safe): pulls the numeric temp floor /
+     RH ceiling out of the Conditions prose. Returns nulls when nothing parses —
+     the capture verdict renders ONLY when a real limit is present. The gauges
+     reuse it for display. (Ghost-Row Capture, 2026-07-03.) */
+  card.parseSpecLimits = function (conditionsText) {
+    var c = String(conditionsText || "");
+    var tempMin = null, rhMax = null;
+    var tm = /above\s*(\d+)\s*°?\s*C/i.exec(c); if (tm) tempMin = +tm[1];
+    var rm = /(?:under|below)\s*(\d+)\s*%/i.exec(c); if (rm) rhMax = +rm[1];
+    return { tempMin: tempMin, rhMax: rhMax };
+  };
   function specLimits(job) {
-    var temp = "&gt;15°C", rh = "&lt;85%";
-    var c = job.conditions || "";
-    var tm = /above\s*(\d+)\s*°?C/i.exec(c); if (tm) temp = "&gt;" + tm[1] + "°C";
-    var rm = /under\s*(\d+)\s*%|below\s*(\d+)\s*%|(\d+)\s*%/i.exec(c); if (rm) rh = "&lt;" + (rm[1] || rm[2] || rm[3]) + "%";
+    var lim = card.parseSpecLimits(job.conditions || "");
+    var temp = "&gt;" + (lim.tempMin != null ? lim.tempMin : 15) + "°C";
+    var rh = "&lt;" + (lim.rhMax != null ? lim.rhMax : 85) + "%";
     return '<div class="speclim"><div class="gauges">' +
       gaugeFrame("temp", temp) + gaugeFrame("rh", rh) + gaugeFrame("MVT", "test") + "</div></div>";
   }
+
+  /* today (YYYY-MM-DD): tests + gen-sitewire inject global.TODAY; the browser
+     falls back to the real local date. Kept node-safe (no top-level Date call). */
+  function todayISO() {
+    var g = (typeof globalThis !== "undefined" && globalThis) ||
+      (typeof global !== "undefined" && global) || (typeof window !== "undefined" && window) || {};
+    if (typeof g.TODAY === "string" && g.TODAY) return g.TODAY;
+    var d = new Date();
+    var p = function (n) { n = String(n); return n.length < 2 ? "0" + n : n; };
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+  }
+
+  /* column index of the first readings header whose name contains `needle` */
+  function readCol(header, needle) {
+    var H = (header || []).map(function (h) { return String(h).toLowerCase(); });
+    for (var i = 0; i < H.length; i++) { if (H[i].indexOf(needle) >= 0) return i; }
+    return -1;
+  }
+
+  /* capture recency signal (exported, node-safe) — reads ONLY job.phase +
+     job.readings. `active` mirrors the capture bar (phase >= 2). `last` = the most
+     recently appended reading; `outOfSpecToday` = a row dated today carries the ⚠
+     spec flag in its notes. No quotas, no timers (Brad softened OWED-TODAY 07-03). */
+  card.captureState = function (job) {
+    var active = parseInt(String((job && job.phase) || ""), 10) >= 2;
+    var rd = (job && job.readings) || {};
+    var header = rd.header || [], rows = rd.rows || [];
+    var cDate = readCol(header, "date"), cArea = readCol(header, "area"), cNotes = readCol(header, "note");
+    var today = todayISO(), todayCount = 0, outOfSpecToday = false, last = null;
+    rows.forEach(function (r) {
+      if (cDate >= 0 && r[cDate] === today) {
+        todayCount++;
+        var note = cNotes >= 0 ? String(r[cNotes] || "") : "";
+        if (note.indexOf("⚠") >= 0) outOfSpecToday = true;
+      }
+    });
+    if (rows.length) {
+      var lr = rows[rows.length - 1];
+      last = { area: cArea >= 0 ? (lr[cArea] || "") : "", date: cDate >= 0 ? (lr[cDate] || "") : "" };
+    }
+    return { active: active, todayCount: todayCount, last: last, outOfSpecToday: outOfSpecToday };
+  };
+
+  /* ===== GHOST-ROW CAPTURE (Feature A) ===== */
+  /* the ghost seeds + chip sources + spec limits, computed once from the parsed
+     vault markdown (node-safe: no DOM). Embedded as JSON into the card document. */
+  card.captureData = function (job) {
+    var rd = (job && job.readings) || {}, header = rd.header || [], rows = rd.rows || [];
+    var cArea = readCol(header, "area"), cBatch = readCol(header, "batch"),
+      cMoist = readCol(header, "moist"), cTemp = readCol(header, "temp"),
+      cRH = readCol(header, "rh"), cCsp = readCol(header, "csp");
+    var last = rows.length ? rows[rows.length - 1] : null;
+    var cell = function (c) { return last && c >= 0 ? (last[c] || "") : ""; };
+    var seed = { area: cell(cArea), batch: cell(cBatch), CSP: cell(cCsp), moisture: cell(cMoist), temp: cell(cTemp), RH: cell(cRH) };
+    var seen = {}, areas = [];
+    rows.forEach(function (r) { var a = cArea >= 0 ? String(r[cArea] || "").trim() : ""; if (a && !seen[a]) { seen[a] = 1; areas.push(a); } });
+    var pseen = {}, products = [];
+    var pushP = function (p) { p = String(p || "").trim(); if (p && !pseen[p]) { pseen[p] = 1; products.push(p); } };
+    (((job && job.materials) || {}).rows || []).forEach(function (r) { pushP(r[0]); });
+    (((job && job.usage) || {}).rows || []).forEach(function (r) { pushP(r[0]); });
+    return { seed: seed, areas: areas, products: products, spec: card.parseSpecLimits((job && job.conditions) || "") };
+  };
+
+  function stepMarkup(key, label, unit) {
+    return '<div class="capstep" data-key="' + key + '" data-val="">' +
+      '<label>' + label + '</label><div class="stepline">' +
+      '<button type="button" class="stepbtn" data-dir="-1">−</button>' +
+      '<span class="stepval"><span class="v">—</span><span class="u">' + unit + '</span></span>' +
+      '<button type="button" class="stepbtn" data-dir="1">+</button></div></div>';
+  }
+  /* the hidden bottom-sheet form (static skeleton; the controller fills it from CAP) */
+  function captureOverlay() {
+    return '<div class="capov" id="capov" hidden><div class="capcard">' +
+      '<div class="caphead"><span class="capt" id="capt">Log a reading</span>' +
+      '<button type="button" class="capx" id="capx">✕</button></div>' +
+      '<div id="capread">' +
+      '<div class="capfield"><label>Area</label><input id="c-area" autocomplete="off"><div class="capchips" id="c-areachips"></div></div>' +
+      '<div class="capfield"><label>CSP · surface profile</label><div class="capchips csp" id="c-csp"></div></div>' +
+      '<div class="capsteppers">' + stepMarkup("moisture", "Moisture", "%") + stepMarkup("temp", "Temp", "°C") + stepMarkup("RH", "RH", "%") + '</div>' +
+      '<div class="capverdict" id="c-verdict" hidden></div>' +
+      '<div class="capfield"><label>WFT / DFT</label><input id="c-dft" autocomplete="off"><div class="capchips"><button type="button" class="capchip" id="c-nocoat">no coating applied</button></div></div>' +
+      '<div class="capfield"><label>Batch # · one or more</label><input id="c-batch" autocomplete="off" placeholder="e.g. 288-A-2207, 248-C-1130"></div>' +
+      '<div class="capfield"><label>Notes</label><textarea id="c-notes"></textarea></div></div>' +
+      '<div id="capuse" hidden>' +
+      '<div class="capfield"><label>Product</label><input id="u-name" autocomplete="off"><div class="capchips" id="u-prodchips"></div></div>' +
+      '<div class="capfield"><label>Qty used</label><input id="u-qty" autocomplete="off" placeholder="e.g. 9 kits (27 gal)"></div>' +
+      '<div class="capfield"><label>Notes</label><input id="u-notes" autocomplete="off"></div></div>' +
+      '<button type="button" class="capsave" id="capsave">Save reading</button>' +
+      '<div class="capfoot" id="capfoot"></div></div></div>';
+  }
+
+  /* capture controller — serialized via .toString() into the card document, so it
+     is authored as normal JS (node --check validates it) instead of a hand-escaped
+     mega-string. Runs INSIDE the iframe, self-contained (CAP + the DOM only). In the
+     standalone exported card there is no parent window, so it returns immediately and
+     the +Reading/+Batch bar stays inert exactly as before (spec: standalone inert). */
+  function capController(CAP) {
+    if (!(window.parent && window.parent !== window)) return;
+    var ov = document.getElementById("capov");
+    if (!ov) return;
+    var kind = "reading";
+    var STEP = { moisture: 0.1, temp: 1, RH: 5 };
+    var $ = function (id) { return document.getElementById(id); };
+    function num(x) { var m = /-?\d+(\.\d+)?/.exec(String(x == null ? "" : x)); return m ? parseFloat(m[0]) : null; }
+    function chip(t, on) { return '<button type="button" class="capchip' + (on ? " on" : "") + '">' + t + "</button>"; }
+    function fillCsp(sel) { var h = ""; for (var i = 1; i <= 9; i++) h += chip(i, String(sel) === String(i)); $("c-csp").innerHTML = h; }
+    function fillChips(el, list) { var h = "", L = list || []; for (var i = 0; i < L.length; i++) h += chip(L[i], false); el.innerHTML = h; }
+    function stepEl(key) { return document.querySelector('.capstep[data-key="' + key + '"]'); }
+    function setStep(key, val) { var s = stepEl(key); if (!s) return; var blank = (val === "" || val == null); s.setAttribute("data-val", blank ? "" : val); s.querySelector(".v").textContent = blank ? "—" : val; }
+    function getStep(key) { var s = stepEl(key); return s ? (s.getAttribute("data-val") || "") : ""; }
+    function verdict() {
+      var v = $("c-verdict"), sp = CAP.spec || {};
+      if (kind !== "reading" || (sp.tempMin == null && sp.rhMax == null)) { v.hidden = true; return; }
+      var t = num(getStep("temp")), rh = num(getStep("RH")), bad = [];
+      if (sp.tempMin != null && t != null && t < sp.tempMin) bad.push("⚠ " + t + "°C — spec is >" + sp.tempMin + "°C");
+      if (sp.rhMax != null && rh != null && rh > sp.rhMax) bad.push("⚠ " + rh + "% RH — spec is <" + sp.rhMax + "%");
+      v.hidden = false;
+      if (bad.length) { v.className = "capverdict bad"; v.innerHTML = bad.join("<br>"); }
+      else { v.className = "capverdict ok"; v.textContent = "IN SPEC"; }
+    }
+    function specFlags() {
+      var sp = CAP.spec || {}, t = num(getStep("temp")), rh = num(getStep("RH")), f = [];
+      if (sp.tempMin != null && t != null && t < sp.tempMin) f.push("⚠ temp below " + sp.tempMin + "°C spec");
+      if (sp.rhMax != null && rh != null && rh > sp.rhMax) f.push("⚠ RH above " + sp.rhMax + "% spec");
+      return f;
+    }
+    function open(k) {
+      kind = k; var read = (k === "reading");
+      $("capread").hidden = !read; $("capuse").hidden = read;
+      $("capt").textContent = read ? "Log a reading" : "Log product usage";
+      $("capsave").textContent = read ? "Save reading" : "Save usage";
+      $("capfoot").textContent = "";
+      if (read) {
+        var s = CAP.seed || {};
+        $("c-area").value = s.area || ""; $("c-batch").value = s.batch || "";
+        $("c-dft").value = ""; $("c-notes").value = "";
+        fillCsp(s.CSP || ""); setStep("moisture", s.moisture || ""); setStep("temp", s.temp || ""); setStep("RH", s.RH || "");
+        fillChips($("c-areachips"), CAP.areas || []); verdict();
+      } else {
+        $("u-name").value = ""; $("u-qty").value = ""; $("u-notes").value = "";
+        fillChips($("u-prodchips"), CAP.products || []);
+      }
+      ov.hidden = false;
+    }
+    function close() { ov.hidden = true; try { window.parent.postMessage({ fxc: "capture-close" }, "*"); } catch (e) {} }
+    function post(kindStr, row) { try { window.parent.postMessage({ fxc: "capture", kind: kindStr, row: row }, "*"); } catch (e) {} }
+    function reghost(row) {
+      CAP.seed = { area: row.area || "", batch: row.batch || "", CSP: row.CSP || "", moisture: row.moisture || "", temp: row.temp || "", RH: row.RH || "" };
+      if (row.area && CAP.areas.indexOf(row.area) < 0) CAP.areas.push(row.area);
+    }
+    function save() {
+      if (kind === "reading") {
+        var picked = document.querySelector("#c-csp .capchip.on");
+        var row = {
+          area: $("c-area").value.trim(), batch: $("c-batch").value.trim(),
+          CSP: picked ? picked.textContent : "", moisture: getStep("moisture"), temp: getStep("temp"), RH: getStep("RH"),
+          dft: $("c-dft").value.trim(), notes: $("c-notes").value.trim()
+        };
+        var fl = specFlags(); if (fl.length) row.notes = (row.notes ? row.notes + " " : "") + fl.join(" ");
+        post("reading", row); reghost(row);
+        $("c-notes").value = ""; $("capfoot").textContent = "Saved ✓ — next row ready"; verdict();
+      } else {
+        var urow = { product: $("u-name").value.trim(), qty: $("u-qty").value.trim(), notes: $("u-notes").value.trim() };
+        if (!urow.product) { $("capfoot").textContent = "Pick or type a product first"; return; }
+        post("usage", urow);
+        $("u-qty").value = ""; $("u-notes").value = ""; $("capfoot").textContent = "Saved ✓ — next row ready";
+      }
+    }
+    var rb = $("cap-reading"); if (rb) rb.onclick = function () { open("reading"); };
+    var bb = $("cap-batch"); if (bb) bb.onclick = function () { open("usage"); };
+    var strip = $("capstrip"); if (strip) strip.onclick = function () { open("reading"); };
+    $("capx").onclick = close;
+    ov.onclick = function (e) { if (e.target === ov) close(); };
+    $("capsave").onclick = save;
+    $("c-nocoat").onclick = function () { $("c-dft").value = "no coating applied"; };
+    $("c-csp").onclick = function (e) { var b = e.target.closest(".capchip"); if (!b) return; var all = $("c-csp").querySelectorAll(".capchip"); for (var i = 0; i < all.length; i++) all[i].classList.remove("on"); b.classList.add("on"); };
+    $("c-areachips").onclick = function (e) { var b = e.target.closest(".capchip"); if (b) $("c-area").value = b.textContent; };
+    $("u-prodchips").onclick = function (e) { var b = e.target.closest(".capchip"); if (b) $("u-name").value = b.textContent; };
+    var sbtns = document.querySelectorAll(".capstep .stepbtn");
+    for (var i = 0; i < sbtns.length; i++) {
+      sbtns[i].onclick = function () {
+        var st = this.closest(".capstep"), key = st.getAttribute("data-key");
+        var dir = +this.getAttribute("data-dir"), step = STEP[key] || 1;
+        var cur = num(st.getAttribute("data-val")); if (cur == null) cur = 0;
+        var nv = Math.round((cur + dir * step) * 100) / 100; if (nv < 0) nv = 0;
+        setStep(key, nv); verdict();
+      };
+    }
+  }
+  card.captureScript = function (job) {
+    return "(" + capController.toString() + ")(" + JSON.stringify(card.captureData(job)) + ");";
+  };
+  card._overlay = captureOverlay; // exposed for the _dev capture-form preview only
   function gaugeFrame(label, val) {
     return '<div class="g"><svg viewBox="0 0 100 60"><path d="M 12 55 A 38 38 0 0 1 88 55" fill="none" stroke="#e6e7e9" stroke-width="9" stroke-linecap="round"/>' +
       '<path d="M 12 55 A 38 38 0 0 1 88 55" fill="none" stroke="#cfe9dc" stroke-width="9" stroke-linecap="round"/></svg>' +
@@ -712,11 +949,11 @@
       var dayMap = {}, dayOrder = [];
       rd.rows.forEach(function (r) {
         var parts = [];
-        if (cMoist >= 0 && r[cMoist]) parts.push("<b>" + esc(r[cMoist]) + "</b> moisture");
-        if (cTemp >= 0 && r[cTemp]) parts.push("<b>" + esc(r[cTemp]) + "</b>");
-        if (cRH >= 0 && r[cRH]) parts.push("<b>" + esc(r[cRH]) + "</b> RH");
+        if (cMoist >= 0 && r[cMoist]) parts.push("<b>" + esc(r[cMoist]) + (/%/.test(r[cMoist]) ? "" : "%") + "</b> moisture");
+        if (cTemp >= 0 && r[cTemp]) parts.push("<b>" + esc(r[cTemp]) + (/[°cC]/.test(r[cTemp]) ? "" : "°C") + "</b>");
+        if (cRH >= 0 && r[cRH]) parts.push("<b>" + esc(r[cRH]) + (/%/.test(r[cRH]) ? "" : "%") + "</b> RH");
         if (cBatch >= 0 && r[cBatch]) parts.push("batch <b>" + esc(r[cBatch]) + "</b>");
-        if (cWft >= 0 && r[cWft]) parts.push("<b>" + esc(r[cWft]) + "</b> WFT/DFT");
+        if (cWft >= 0 && r[cWft]) parts.push("WFT/DFT <b>" + esc(r[cWft]) + "</b>");
         var area = cArea >= 0 ? (r[cArea] || "") : "";
         var d = (cDate >= 0 && r[cDate]) ? r[cDate] : "undated";
         if (!dayMap[d]) { dayMap[d] = []; dayOrder.push(d); }
@@ -764,9 +1001,29 @@
     out = out.concat(days);
     if (miles.length) { out.push('<div class="wireday">Milestones</div>'); out = out.concat(miles); }
     out.push('<div class="wstart">— start of #' + esc(job.jobNumber) + " —</div>");
-    var cap = '<div class="capbar"><div class="capbtn primary">+ Reading</div>' +
-      '<div class="capbtn">+ Batch</div><div class="capbtn">+ Photo</div></div>' +
-      '<div class="capnote">replies propose a table row — Brad confirms before it&rsquo;s written</div>';
+    /* capture bar is on-site only — readings/batches/photos wait for the ACTIVE
+       phase (Brad 2026-07-03); planning/closeout cards show why it's not live yet */
+    var onSite = parseInt(String(job.phase || ""), 10) >= 2;
+    var cap;
+    if (onSite) {
+      var cs = card.captureState(job);
+      var strip;
+      if (cs.last && cs.last.date) {
+        strip = '<div class="capstrip' + (cs.outOfSpecToday ? " alarm" : "") + '" id="capstrip">' +
+          '<span class="dotm"></span><span class="cslab">Last reading</span>' +
+          '<span class="csval">' + (cs.last.area ? esc(cs.last.area) + " · " : "") + (wireDate(cs.last.date) || esc(cs.last.date)) + '</span>' +
+          (cs.outOfSpecToday ? '<span class="csval" style="margin-left:auto">⚠ out of spec today</span>' : "") + "</div>";
+      } else {
+        strip = '<div class="capstrip" id="capstrip"><span class="dotm" style="background:var(--lab)"></span>' +
+          '<span class="csval">No readings yet — tap to log the first</span></div>';
+      }
+      cap = strip +
+        '<div class="capbar"><div class="capbtn primary" id="cap-reading">+ Reading</div>' +
+        '<div class="capbtn" id="cap-batch">+ Batch</div><div class="capbtn">+ Photo</div></div>' +
+        '<div class="capnote">each Save writes one role-stamped row to the vault · + Photo coming</div>';
+    } else {
+      cap = '<div class="capnote">Capture opens once the job is active on site.</div>';
+    }
     return '<div class="span2">' + out.join("") + cap + "</div>";
   }
 
@@ -818,10 +1075,11 @@
       "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">" +
       "<title>" + esc(job.jobNumber) + " — FX Field card</title><style>" + card.CSS + "</style></head><body>" +
       card.body(job) +
+      captureOverlay() +
       '<div class="lb" id="lb"><div class="lb-top"><div class="lb-count" id="lbCount"></div><button class="lb-x" onclick="closeLb()">✕</button></div>' +
       '<div class="lb-img"><img id="lbImg" src="" alt=""></div>' +
       '<div class="lb-nav"><button class="lb-btn" onclick="lbNav(-1)">‹</button><div class="lb-cap" id="lbCap"></div><button class="lb-btn" onclick="lbNav(1)">›</button></div></div>' +
-      "<script>" + card.script(job) + "<\/script></body></html>";
+      "<script>" + card.script(job) + card.captureScript(job) + "<\/script></body></html>";
   };
 
   if (typeof module !== "undefined" && module.exports) module.exports = card;
