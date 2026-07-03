@@ -149,7 +149,21 @@
   /* role                                                        */
   /* ---------------------------------------------------------- */
 
+  /* crew device: set when the app was opened via a worker card-link
+     (#card=…&crew=1). The role picker then offers ONLY crew names and any
+     typed name is clamped to field scope — a worker link can never hand out
+     Brad/Dan (Brad 2026-07-03). UX guardrail, not security: the shared token
+     is the real boundary (see PROXY-DESIGN.md). Cleared by forgetDevice(). */
+  var CREW_KEY = "fxc.crewDevice";
+  function isCrewDevice() {
+    try { return localStorage.getItem(CREW_KEY) === "1"; } catch (e) { return false; }
+  }
+  function setCrewDevice(on) {
+    try { on ? localStorage.setItem(CREW_KEY, "1") : localStorage.removeItem(CREW_KEY); } catch (e) {}
+  }
+
   function scopeForName(name) {
+    if (isCrewDevice()) return "field";
     name = String(name || "").trim();
     for (var i = 0; i < FULL_ROLES.length; i++) {
       if (FULL_ROLES[i].toLowerCase() === name.toLowerCase()) return "full";
@@ -173,6 +187,7 @@
     var name = String((role && role.name) || "").trim();
     if (!name) return null;
     var scope = (role && (role.scope === "full" || role.scope === "field")) ? role.scope : scopeForName(name);
+    if (isCrewDevice()) scope = "field"; // worker-link devices never hold full scope
     var clean = { name: name, scope: scope };
     try { sessionStorage.setItem(ROLE_KEY, JSON.stringify(clean)); } catch (e) {}
     // keep FXC.state.role in sync for the rest of the app
@@ -277,6 +292,7 @@
     clearToken();
     clearRole();
     try { localStorage.removeItem(CONFIG_KEY); } catch (e) {}
+    setCrewDevice(false); // the escape hatch for a phone that opened a worker link
   }
 
   /* ---------------------------------------------------------- */
@@ -442,7 +458,7 @@
     var ov = overlayShell("fxc-role-overlay");
     var card = cardShell(460);
 
-    var fullTiles = FULL_ROLES.map(function (n) {
+    var fullTiles = isCrewDevice() ? "" : FULL_ROLES.map(function (n) {
       var sub = FULL_SUBS[n] || "PM · full edit";
       return roleTile(n, sub, "full");
     }).join("");
@@ -581,6 +597,10 @@
     showDeviceSetup: showDeviceSetup,
     showRolePicker: showRolePicker,
     renderChip: renderChip,
+
+    // crew-device flag (worker card-links)
+    isCrewDevice: isCrewDevice,
+    setCrewDevice: setCrewDevice,
 
     // constants (for callers that want them)
     FULL_ROLES: FULL_ROLES,

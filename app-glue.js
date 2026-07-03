@@ -373,6 +373,13 @@
      ROUTE + BOOT
      ============================================================ */
   function route() {
+    /* worker card-link (#card=…&crew=1): flag this device crew-only BEFORE any
+       role picker renders — unless it already holds a full-scope session
+       (Brad testing his own worker link must not downgrade his phone). */
+    if (/[#&]crew(=1)?(&|$)/.test(root.location.hash || "")) {
+      var existing = auth().getRole && auth().getRole();
+      if (!(existing && existing.scope === "full") && auth().setCrewDevice) auth().setCrewDevice(true);
+    }
     var demo = /[?&]demo=1\b/.test(root.location.search) || /[?&]demo(\b|=)/.test(root.location.search);
     if (demo) { enterDemo(); return; }
 

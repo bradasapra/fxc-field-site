@@ -853,28 +853,60 @@
       ov.hidden = false;
     }
     function close() { ov.hidden = true; try { window.parent.postMessage({ fxc: "capture-close" }, "*"); } catch (e) {} }
-    function post(kindStr, row) { try { window.parent.postMessage({ fxc: "capture", kind: kindStr, row: row }, "*"); } catch (e) {} }
+    function post(kindStr, row, id) { try { window.parent.postMessage({ fxc: "capture", kind: kindStr, row: row, id: id }, "*"); } catch (e) {} }
     function reghost(row) {
       CAP.seed = { area: row.area || "", batch: row.batch || "", CSP: row.CSP || "", moisture: row.moisture || "", temp: row.temp || "", RH: row.RH || "" };
       if (row.area && CAP.areas.indexOf(row.area) < 0) CAP.areas.push(row.area);
     }
+    /* Save is a round-trip: the form claims NOTHING until the app acks that the
+       commit landed (pilot audit 2026-07-03: the old fire-and-forget said
+       "Saved ✓" even when the write failed — indistinguishable from data loss).
+       Field values are kept on failure so the row can be retried. */
+    var seq = 0, pending = null, ackTimer = null;
+    function foot(msg, isErr) { var f = $("capfoot"); f.textContent = msg; f.style.color = isErr ? "#e2606b" : ""; }
+    function setSaving(on) { $("capsave").disabled = on; if (on) foot("Saving…", false); }
+    function settle(ok, err) {
+      if (!pending) return;
+      var p = pending; pending = null;
+      if (ackTimer) { clearTimeout(ackTimer); ackTimer = null; }
+      setSaving(false);
+      if (!ok) { foot("✗ Not saved — " + (err || "couldn't reach the vault. Fix the connection and tap Save again."), true); return; }
+      if (p.kind === "reading") {
+        reghost(p.row);
+        $("c-notes").value = ""; $("c-dft").value = ""; /* the no-coating chip must never ride into the next row */
+        foot("Saved ✓ — next row ready", false); verdict();
+      } else {
+        $("u-qty").value = ""; $("u-notes").value = "";
+        foot("Saved ✓ — next row ready", false);
+      }
+    }
+    window.addEventListener("message", function (e) {
+      var d = e && e.data;
+      if (!d || d.fxc !== "capture-ack" || !pending || d.id !== pending.id) return;
+      settle(d.ok !== false, d.err);
+    });
     function save() {
+      if (pending) return; /* one in-flight save at a time */
+      if (window.parent === window) { foot("✗ This saved-file copy can't write — open the card through the app link.", true); return; }
+      var row, kindStr;
       if (kind === "reading") {
         var picked = document.querySelector("#c-csp .capchip.on");
-        var row = {
+        row = {
           area: $("c-area").value.trim(), batch: $("c-batch").value.trim(),
           CSP: picked ? picked.textContent : "", moisture: getStep("moisture"), temp: getStep("temp"), RH: getStep("RH"),
           dft: $("c-dft").value.trim(), notes: $("c-notes").value.trim()
         };
         var fl = specFlags(); if (fl.length) row.notes = (row.notes ? row.notes + " " : "") + fl.join(" ");
-        post("reading", row); reghost(row);
-        $("c-notes").value = ""; $("capfoot").textContent = "Saved ✓ — next row ready"; verdict();
+        kindStr = "reading";
       } else {
-        var urow = { product: $("u-name").value.trim(), qty: $("u-qty").value.trim(), notes: $("u-notes").value.trim() };
-        if (!urow.product) { $("capfoot").textContent = "Pick or type a product first"; return; }
-        post("usage", urow);
-        $("u-qty").value = ""; $("u-notes").value = ""; $("capfoot").textContent = "Saved ✓ — next row ready";
+        row = { product: $("u-name").value.trim(), qty: $("u-qty").value.trim(), notes: $("u-notes").value.trim() };
+        if (!row.product) { foot("Pick or type a product first", true); return; }
+        kindStr = "usage";
       }
+      pending = { id: ++seq, kind: kindStr, row: row };
+      setSaving(true);
+      ackTimer = setTimeout(function () { settle(false, "no answer from the app. Reload and check the table before re-saving."); }, 15000);
+      post(kindStr, row, pending.id);
     }
     var rb = $("cap-reading"); if (rb) rb.onclick = function () { open("reading"); };
     var bb = $("cap-batch"); if (bb) bb.onclick = function () { open("usage"); };

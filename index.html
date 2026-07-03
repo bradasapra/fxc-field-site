@@ -364,7 +364,7 @@
   <div class="fieldcard-bar">
     <span id="fieldcard-title">Field card</span>
     <div class="fieldcard-bar-actions">
-      <button id="fieldcard-link" onclick="copyFieldCardLink()" title="Copy a link that opens this card in the app (phone must be connected)">⧉ Copy link</button>
+      <button id="fieldcard-link" onclick="copyFieldCardLink()" title="Copy a worker link that opens this card in the app — the receiving phone gets crew roles only (no Brad/Dan)">⧉ Copy worker link</button>
       <button id="fieldcard-copy" onclick="exportFieldCard()" title="Save a self-contained file to share with someone who doesn't have the app">⬇ Save file</button>
       <button onclick="closeFieldCard()">✕ Close</button>
     </div>
@@ -1128,7 +1128,9 @@ function refreshFieldCard(j){
    — matches everywhere the app is served; execCommand covers older WebKit. */
 function copyFieldCardLink(){
   const j=_fcJob; if(!j) return;
-  const url=location.origin+location.pathname+location.search+"#card="+encodeURIComponent(j.jobNumber||j.id);
+  // &crew=1: the receiving device becomes crew-only — worker links can never
+  // hand out Brad/Dan on the role picker (Brad 2026-07-03)
+  const url=location.origin+location.pathname+location.search+"#card="+encodeURIComponent(j.jobNumber||j.id)+"&crew=1";
   const btn=document.getElementById("fieldcard-link"); const label=btn?btn.textContent:"";
   const done=ok=>{ if(btn){ btn.textContent=ok?"✓ Copied":"Copy failed"; setTimeout(()=>{ btn.textContent=label; },1600); } };
   if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(url).then(()=>done(true),()=>done(false)); }
@@ -1153,20 +1155,31 @@ window.addEventListener("message", function(e){
   const frame = document.getElementById("fieldcard-frame");
   if(!frame || e.source !== frame.contentWindow) return;      // only our field card
   if(d.fxc === "capture-close"){ if(_fcJob) refreshFieldCard(_fcJob); return; }
-  if(d.fxc !== "capture" || !_fcJob || !window.FXC || !FXC.edit) return;
+  if(d.fxc !== "capture") return;
+  const ack = (ok, err) => { try{ frame.contentWindow.postMessage({fxc:"capture-ack", id:d.id, ok:ok, err:err}, "*"); }catch(e){} };
+  // the iframe is waiting on an ack — never leave it hanging on a guard exit
+  if(!window.FXC || !FXC.edit){ ack(false, "the app isn't ready — reload and retry."); return; }
+  if(!_fcJob){ ack(false, "no job is open — reload the card."); return; }
   const row = d.row || {};
   const usage = (d.kind === "usage" || d.kind === "batch");
   const fn = function(job){
     const r = usage ? FXC.data.appendProduct(job, row) : FXC.data.appendReading(job, row);
     r._origPath = job._meta.path; return r;
   };
-  Promise.resolve(FXC.edit.commit(_fcJob, fn, usage ? "product" : "reading")).then(function(ok){
-    if(ok !== false){
-      const fresh = (window.JOBS || []).find(x => x.id === _fcJob.id) || _fcJob;
-      // carry the fetched Site Wire history across the post-capture re-parse
-      if(fresh !== _fcJob && !fresh.history && _fcJob.history) fresh.history = _fcJob.history;
-      _fcJob = fresh;
-    }
+  // serialize saves so a back-to-back save always starts from the refreshed job
+  // (no self-conflict 409s), and ack the iframe only once the commit settles
+  window._fcQueue = (window._fcQueue || Promise.resolve()).then(function(){
+    return Promise.resolve(FXC.edit.commit(_fcJob, fn, usage ? "product" : "reading")).then(function(ok){
+      if(ok !== false){
+        const fresh = (window.JOBS || []).find(x => x.id === _fcJob.id) || _fcJob;
+        // carry the fetched Site Wire history across the post-capture re-parse
+        if(fresh !== _fcJob && !fresh.history && _fcJob.history) fresh.history = _fcJob.history;
+        _fcJob = fresh;
+      }
+      ack(ok !== false, ok === false ? "the app refused or the write failed (see the app banner)." : undefined);
+    }, function(err){
+      ack(false, (err && err.message) || "write failed.");
+    });
   });
 });
 

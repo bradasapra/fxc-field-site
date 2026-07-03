@@ -400,7 +400,7 @@
         "</tbody></table></div>";
       html += '<div class="fxc-logbar">' +
         '<input id="pr-name" type="text" placeholder="product">' +
-        '<input id="pr-qty" type="number" inputmode="decimal" placeholder="qty">' +
+        '<input id="pr-qty" type="text" placeholder="qty (e.g. 2 pails)">' +
         '<input id="pr-notes" type="text" placeholder="notes (units, partial pails…)">' +
         '<button class="fxc-btn" id="fxc-save-product">Log usage</button></div>';
     }
@@ -613,6 +613,24 @@
       hops.push(next); cur = next;
     }
     return cur === targetStatus ? hops : null;
+  }
+  /* every status BEHIND the job, nearest first (for backward-move targets) */
+  function backChain(job) {
+    var out = [], cur = statusBefore(job.status), guard = 0;
+    while (cur && guard++ < 20) { out.push(cur); cur = statusBefore(cur); }
+    return out;
+  }
+  /* the CLOSEST backward status living in the dropped column. A bucket column
+     holds several statuses — the forward path wants its entry status, but a
+     backward drop must not overshoot to it (pilot audit 2026-07-03: every
+     backward drag landed on "won") */
+  function closestBackIn(job, ds) {
+    var cur = statusBefore(job.status), guard = 0;
+    while (cur && guard++ < 20) {
+      if (ds.stage ? stageLabel(cur) === ds.stage : bucketOfStatus(cur) === ds.bucket) return cur;
+      cur = statusBefore(cur);
+    }
+    return null;
   }
   /* gate state for the transition INTO status `to` */
   function hopGate(job, to) {
@@ -995,26 +1013,50 @@
       app().toast && app().toast("Connect this device and pick who you are first — backward moves are committed with your name.", "err");
       return;
     }
-    var fromPh = data().phaseOf(job.status), toPh = data().phaseOf(toStatus);
+    var target = toStatus;
+    var chain = backChain(job); /* nearest first; toStatus is always in it */
     var head = "<h3>" + esc("#" + job.jobNumber) + " · ← Move back</h3>";
     var dropped = droppedOn ? '<p class="fxc-sub">You dropped it on “' + esc(droppedOn) + "” — that's a backward move.</p>" : "";
+    /* the destination is explicit and changeable — a bucket drop resolves to the
+       CLOSEST backward status, and deeper reverts are a deliberate pick, never
+       the silent default (pilot audit 2026-07-03) */
+    var pick = chain.length > 1
+      ? '<label class="fxc-bklbl" for="fxc-bk-to">Back to</label>' +
+        '<select id="fxc-bk-to" class="fxc-bkin">' +
+        chain.map(function (st) {
+          return '<option value="' + esc(st) + '"' + (st === toStatus ? " selected" : "") + ">" +
+            esc(stageLabel(st)) + (st === chain[0] ? " (previous step)" : "") + "</option>";
+        }).join("") + "</select>"
+      : "";
     var will = '<div class="fxc-will"><span class="miss">Backward correction</span> — gates are NOT re-checked.<br>' +
-      "• set <b>" + esc(stageLabel(job.status)) + " → " + esc(stageLabel(toStatus)) + "</b>" +
-      (fromPh !== toPh ? "<br>• move the file back to <b>10-jobs/" + esc(toPh) + "/</b>" : "") +
+      "• set <b>" + esc(stageLabel(job.status)) + ' → <span id="fxc-bk-tolabel">' + esc(stageLabel(toStatus)) + "</span></b>" +
+      '<span id="fxc-bk-movenote"></span>' +
       "<br>• commit as <b>" + esc(auth().actorName()) + "</b> with your reason (kept in the git history)" +
       (demoSandbox ? '<br><span class="soon">Preview: applies here only.</span>' : "") + "</div>" +
+      pick +
       '<label class="fxc-bklbl" for="fxc-bk-reason">Reason (required)</label>' +
       '<input id="fxc-bk-reason" class="fxc-bkin" type="text" placeholder="e.g. deposit reversed · mis-advanced · client paused">';
     var sh = sheet(head + dropped + will +
       '<button class="fxc-btn" id="fxc-bk-go">Move back to ' + esc(stageLabel(toStatus)) + "</button>" +
       '<button class="fxc-btn sec" id="fxc-bk-cancel">Cancel</button>');
     var reason = sh.querySelector("#fxc-bk-reason");
-    sh.querySelector("#fxc-bk-go").onclick = function () {
+    var goBtn = sh.querySelector("#fxc-bk-go");
+    function renderTarget() {
+      var fromPh = data().phaseOf(job.status), toPh = data().phaseOf(target);
+      sh.querySelector("#fxc-bk-tolabel").textContent = stageLabel(target);
+      sh.querySelector("#fxc-bk-movenote").innerHTML =
+        fromPh !== toPh ? "<br>• move the file back to <b>10-jobs/" + esc(toPh) + "/</b>" : "";
+      goBtn.textContent = "Move back to " + stageLabel(target);
+    }
+    renderTarget();
+    var sel = sh.querySelector("#fxc-bk-to");
+    if (sel) sel.onchange = function () { target = sel.value; renderTarget(); };
+    goBtn.onclick = function () {
       var r = String(reason.value || "").trim();
       if (!r) { reason.classList.add("bkerr"); reason.focus(); app().toast && app().toast("A reason is required to move a job back.", "err"); return; }
       closeSheet();
-      var fn = function (j) { var res = data().setStatus(j, toStatus, { back: true, reason: r }); res._origPath = j._meta.path; return res; };
-      edit.commit(job, fn, "status-back", { toStatus: toStatus, back: true });
+      var fn = function (j) { var res = data().setStatus(j, target, { back: true, reason: r }); res._origPath = j._meta.path; return res; };
+      edit.commit(job, fn, "status-back", { toStatus: target, back: true });
     };
     sh.querySelector("#fxc-bk-cancel").onclick = closeSheet;
   };
@@ -1044,7 +1086,9 @@
       if (entry === job.status) return true;
       var hops = chainTo(job, entry);
       if (hops && hops.length) { edit.confirmMove(job, entry, { droppedOn: ds.stage || ds.bucket }); return true; }
-      backwardSheet(job, entry, ds.stage || ds.bucket); /* unreachable forward = a backward move */
+      /* unreachable forward = a backward move — target the CLOSEST status in the
+         dropped column, never the column's entry status (that's forward-only) */
+      backwardSheet(job, closestBackIn(job, ds) || entry, ds.stage || ds.bucket);
       return true;
     }
     var next = nextStatusOf(job);
