@@ -307,20 +307,19 @@
             '<span class="box">' + (b.checked ? "✓" : "") + "</span>" +
             '<span class="lbl">' + esc(b.text) + "</span></div>";
         };
-        /* Brad 2026-07-02: the work-order checklist shows only the CHECKED boxes;
-           open items collapse behind the count — tap "3/4" to reveal + finish them
-           (keeps gate-completion working without the wall of empty boxes). */
-        var open = g.boxes.filter(function (b) { return !b.checked; });
-        var hasOpen = open.length > 0 && canGate;
-        var isOpen = hasOpen && !!revealState(job.id)[g.gateName];
-        html += '<div class="fxc-gatehead' + (hasOpen ? " more" : "") + (isOpen ? " exp" : "") + '"' +
-          (hasOpen ? ' data-reveal="fxc-gopen-' + gi + '" data-gate="' + esc(g.gateName) + '"' : "") + ">" +
+        /* Brad 2026-07-03: the WHOLE checklist (checked and open alike) collapses
+           behind the count — tap "3/4" to reveal. Boxes render in vault order and
+           stay put when checked; no regrouping. (Supersedes 2026-07-02 checked-
+           boxes-visible layout, which made items jump to the top on check.) */
+        var hasBoxes = g.boxes.length > 0;
+        var isOpen = hasBoxes && !!revealState(job.id)[g.gateName];
+        html += '<div class="fxc-gatehead' + (hasBoxes ? " more" : "") + (isOpen ? " exp" : "") + '"' +
+          (hasBoxes ? ' data-reveal="fxc-gopen-' + gi + '" data-gate="' + esc(g.gateName) + '"' : "") + ">" +
           '<span class="gname">' + esc(g.gateName) + "</span>" +
           '<span class="pct">' + pr.done + "/" + pr.total + "</span></div>";
-        g.boxes.forEach(function (b) { if (b.checked) html += row(b); });
-        if (hasOpen) {
+        if (hasBoxes) {
           html += '<div class="fxc-reveal' + (isOpen ? " open" : "") + '" id="fxc-gopen-' + gi + '">';
-          open.forEach(function (b) { html += row(b); });
+          g.boxes.forEach(function (b) { html += row(b); });
           html += "</div>";
         }
       });
@@ -354,8 +353,11 @@
       }
     }
 
-    /* ---- field logs (reading / product / note) ---- */
-    var canReading = can("reading");
+    /* ---- field logs (reading / product / note) — readings are on-site captures,
+       so they wait for the ACTIVE phase (Brad 2026-07-03), same gate as product
+       usage below; notes stay available any phase ---- */
+    var phaseNum = parseInt(String(job.phase || ""), 10);
+    var canReading = can("reading") && phaseNum >= 2;
     var canNote = can("note");
     if (canReading || canNote) {
       html += "<h4>Log</h4>";
@@ -380,9 +382,9 @@
     }
 
     /* ---- product usage — PJA capture (Brad 06-12: log-style; only once the
-       job is ACTIVE or later — planning work orders stay clean) ---- */
-    var phaseNum = parseInt(String(job.phase || ""), 10);
-    if (canReading && phaseNum >= 2) {
+       job is ACTIVE or later — planning work orders stay clean). canReading now
+       already carries the phaseNum >= 2 gate. ---- */
+    if (canReading) {
       var u = job.usage;
       var uRows = (u && u.rows) ? u.rows : [];
       html += '<h4>Product usage — PJA capture <span class="fxc-cap-badge">' + uRows.length + "</span></h4>";

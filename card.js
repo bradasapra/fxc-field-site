@@ -764,9 +764,14 @@
     out = out.concat(days);
     if (miles.length) { out.push('<div class="wireday">Milestones</div>'); out = out.concat(miles); }
     out.push('<div class="wstart">— start of #' + esc(job.jobNumber) + " —</div>");
-    var cap = '<div class="capbar"><div class="capbtn primary">+ Reading</div>' +
-      '<div class="capbtn">+ Batch</div><div class="capbtn">+ Photo</div></div>' +
-      '<div class="capnote">replies propose a table row — Brad confirms before it&rsquo;s written</div>';
+    /* capture bar is on-site only — readings/batches/photos wait for the ACTIVE
+       phase (Brad 2026-07-03); planning/closeout cards show why it's not live yet */
+    var onSite = parseInt(String(job.phase || ""), 10) >= 2;
+    var cap = onSite
+      ? '<div class="capbar"><div class="capbtn primary">+ Reading</div>' +
+        '<div class="capbtn">+ Batch</div><div class="capbtn">+ Photo</div></div>' +
+        '<div class="capnote">replies propose a table row — Brad confirms before it&rsquo;s written</div>'
+      : '<div class="capnote">Capture opens once the job is active on site.</div>';
     return '<div class="span2">' + out.join("") + cap + "</div>";
   }
 
