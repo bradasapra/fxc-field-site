@@ -17,7 +17,7 @@
 'use strict';
 
 // Bump this string on every deploy so clients drop the old shell cache.
-const CACHE_VERSION = 'v8';
+const CACHE_VERSION = 'v9';
 const CACHE_NAME = 'fxc-shell-' + CACHE_VERSION;
 
 // The complete app shell (relative to the SW scope = the folder it ships in).
