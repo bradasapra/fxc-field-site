@@ -289,27 +289,6 @@
     return idx;
   }
 
-  /* parse the "## Materials" section: free-text note lines + one markdown table
-     (header row + data rows). Returns {notes, header[], rows[][]} or null. */
-  function parseMaterials(rawLines, sectionIdx) {
-    var r = sectionRange(rawLines, sectionIdx.materials);
-    if (!r) return null;
-    var notes = [], header = null, rows = [];
-    for (var i = r.start + 1; i < r.end; i++) {
-      var line = rawLines[i].trim();
-      if (!line) continue;
-      if (line.charAt(0) === "|") {
-        var cells = line.replace(/^\|/, "").replace(/\|$/, "").split("|").map(function (c) { return c.trim(); });
-        if (/^[-:\s]*$/.test(cells.join(""))) continue; /* separator row */
-        if (!header) header = cells; else rows.push(cells);
-      } else {
-        notes.push(line);
-      }
-    }
-    if (!header && !rows.length && !notes.length) return null;
-    return { notes: notes.join(" "), header: header || [], rows: rows };
-  }
-
   /* parse the "## Links" bullets → [{label, target, url}] — Sync paths render as
      text, http(s) targets as real links (PDS refs live here per Brad 06-12) */
   function parseLinks(rawLines, sectionIdx) {
@@ -327,23 +306,38 @@
 
   /* parse a "## ..." markdown table → {header, rows} (rows may be empty — a
      section can start as a blank header awaiting field logs). The separator row
-     (|---|---|) is skipped. Shared by the readings + product-usage sections. */
-  function parseTableSection(rawLines, headerIdx) {
+     (|---|---|) is skipped. Shared by the materials + readings + product-usage
+     sections. opts.notes: also collect the section's free-text lines (the
+     materials math/order notes) → {notes, header[], rows[][]}, null only when
+     the whole section is empty; without opts the shape stays {header, rows},
+     null when there's no header row. */
+  function parseTableSection(rawLines, headerIdx, opts) {
+    opts = opts || {};
     var r = sectionRange(rawLines, headerIdx);
     if (!r) return null;
-    var header = null, rows = [];
+    var notes = [], header = null, rows = [];
     for (var i = r.start + 1; i < r.end; i++) {
       var line = rawLines[i].trim();
-      if (!line || line.charAt(0) !== "|") continue;
+      if (!line) continue;
+      if (line.charAt(0) !== "|") {
+        if (opts.notes) notes.push(line);
+        continue;
+      }
       var cells = line.replace(/^\|/, "").replace(/\|$/, "").split("|").map(function (c) { return c.trim(); });
       if (/^[-:\s]*$/.test(cells.join(""))) continue;
       if (!header) header = cells; else rows.push(cells);
     }
+    if (opts.notes) {
+      if (!header && !rows.length && !notes.length) return null;
+      return { notes: notes.join(" "), header: header || [], rows: rows };
+    }
     if (!header) return null;
     return { header: header, rows: rows };
   }
-  /* "## Readings / batch log" and "## Product usage (PJA capture)" tables. Both
-     feed the worker card's Site Wire (readings by station tag, usage roll-up). */
+  /* "## Material load list" (with its math/order notes), "## Readings / batch
+     log" and "## Product usage (PJA capture)". All feed the worker card's Site
+     Wire and the drawer's capture tables. */
+  function parseMaterials(rawLines, sectionIdx) { return parseTableSection(rawLines, sectionIdx.materials, { notes: true }); }
   function parseReadings(rawLines, sectionIdx) { return parseTableSection(rawLines, sectionIdx.readings); }
   function parseUsage(rawLines, sectionIdx) { return parseTableSection(rawLines, sectionIdx.product); }
 
@@ -1123,6 +1117,47 @@
     return { newText: joinLines(job, lines), message: msg };
   };
 
+  /* ---- parseCommitLine(msg) : the pure inverse of the commit-message
+          grammar every mutator above emits — "[<role>] <verb> <job#> — <detail>"
+          (advance/revert carry "<from> -> <to>" before the em-dash trailer).
+          Returns null for messages that aren't ours (vault-side edits, merges).
+          Extras by verb:
+            advance: {from, to, bulkGate?, bulkCount?}
+            revert:  {from, to, reason}
+            set:     {key, value}  (value "" when the message says "(cleared)")
+          (check/uncheck keep their "<gate>: <box text>" detail whole — gate
+          names themselves may contain ": ", so a split would be a guess)
+          Any new write action must keep this parser green (harness symmetry
+          test) — the Site Wire's who/when reads the trail through it. ---- */
+  data.parseCommitLine = function (msg) {
+    var first = String(msg == null ? "" : msg).split(/\r?\n/)[0];
+    var m = /^\[([^\]]+)\] (check|uncheck|advance|revert|reading|product|note|set|cleanup) (\S+)(?: (.*))?$/.exec(first);
+    if (!m) return null;
+    var e = { role: m[1], verb: m[2], jobNumber: m[3], detail: m[4] || "" };
+    if (e.verb === "advance" || e.verb === "revert") {
+      var t = /^(\S+) -> (\S+)(?: — (.*))?$/.exec(e.detail);
+      if (!t) return null;
+      e.from = t[1]; e.to = t[2];
+      var trailer = t[3] || "";
+      if (e.verb === "revert") {
+        e.reason = trailer;
+      } else if (trailer) {
+        var b = /^"(.+)": (\d+) items? bulk-confirmed/.exec(trailer);
+        if (b) { e.bulkGate = b[1]; e.bulkCount = Number(b[2]); }
+      }
+    } else {
+      var d = /^— (.*)$/.exec(e.detail);
+      if (!d) return null;
+      e.detail = d[1];
+      if (e.verb === "set") {
+        var s = /^(\S+) ([\s\S]*)$/.exec(e.detail);
+        if (s) { e.key = s[1]; e.value = s[2] === "(cleared)" ? "" : s[2]; }
+        else { e.key = e.detail; e.value = ""; }
+      }
+    }
+    return e;
+  };
+
   /* ============================================================
      GITHUB REST CLIENT
      ============================================================ */
@@ -1231,6 +1266,38 @@
         var job = data.parseJobMarkdown(text, path, j.sha);
         return job;
       });
+  };
+
+  /* ---- loadHistory(job) : ONE page of the job file's commit trail (~30
+          commits, no pagination) parsed through parseCommitLine — the Site
+          Wire's dated who/when. Read-only (a scope the PAT already has);
+          sw.js passes api.github.com through untouched. Commits that don't
+          speak the app grammar (vault-side edits) are skipped. Demo/offline/
+          unconfigured/any failure → resolves null, and the card falls back
+          to its derived undated milestones. ---- */
+  data.loadHistory = function (job) {
+    var path = job && job._meta && job._meta.path;
+    if (!path || !_cfg.owner || !_cfg.repo) return Promise.resolve(null);
+    if (FXC.state && FXC.state.mode !== "live") return Promise.resolve(null);
+    var url = ghBase() + "/commits?path=" + encodeURIComponent(path) +
+      "&sha=" + encodeURIComponent(_cfg.branch) + "&per_page=30";
+    return fetch(url, { headers: ghHeaders() })
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (list) {
+        if (!Array.isArray(list)) return null;
+        var events = [];
+        list.forEach(function (c) {
+          var e = data.parseCommitLine(c && c.commit && c.commit.message);
+          if (!e) return;
+          var when = (c.commit.author && c.commit.author.date) ||
+            (c.commit.committer && c.commit.committer.date) || "";
+          e.date = String(when).slice(0, 10); // YYYY-MM-DD
+          e.sha = c.sha || "";
+          events.push(e);
+        });
+        return events.length ? events : null; // newest first, as the API returns them
+      })
+      ["catch"](function () { return null; });
   };
 
   /* writeJob: PUT contents with sha; optional {move}. Returns {sha}. */

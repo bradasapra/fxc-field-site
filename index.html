@@ -909,21 +909,38 @@ document.addEventListener("pointerup", ()=>{ clearPress(); if(drag) suppressClic
 document.addEventListener("pointercancel", ()=>{ clearPress(); endDrag(false); });
 
 /* ===================== DETAIL (Work Order) ===================== */
-/* Material load list — calculated by the material-calculator agent into the job
-   file's ## Materials section; crew-visible (it IS the truck-loading answer).
-   CONFIRM cells flag numbers a human still owes. */
-function materialsHTML(j){
-  const m = j.materials;
-  if(!m || (!m.rows.length && !m.notes)) return "";
+/* One renderer for every parsed vault table section ({header, rows, notes?}).
+   CONFIRM cells flag numbers a human still owes; **bold** markdown renders.
+   opts: cls (extra tablewrap class) · notesLabel (collapsed notes summary) ·
+   empty (line shown when the section exists but has no rows yet). Null-safe:
+   a job without the section (sparse 2769 shape) renders nothing. */
+function tableHTML(title, t, opts){
+  opts = opts || {};
+  if(!t || (!(t.rows||[]).length && !t.notes && !opts.empty)) return "";
   const cell = c => /\bCONFIRM\b/.test(c)
     ? `<span class="mat-confirm">${esc(c)}</span>`
     : esc(c).replace(/\*\*(.+?)\*\*/g,"<b>$1</b>");
-  const table = m.rows.length ? `<div class="tablewrap mat"><table>
-      <thead><tr>${m.header.map(h=>`<th>${esc(h)}</th>`).join("")}</tr></thead>
-      <tbody>${m.rows.map(r=>`<tr>${r.map(c=>`<td>${cell(c)}</td>`).join("")}</tr>`).join("")}</tbody>
-    </table></div>` : "";
-  const notes = m.notes ? `<details class="sop mat-math"><summary>The math, caveats &amp; ordering notes</summary><p>${cell(m.notes)}</p></details>` : "";
-  return `<h4>🧱 Material load list</h4>${table}${notes}`;
+  const table = (t.rows||[]).length ? `<div class="tablewrap${opts.cls?" "+opts.cls:""}"><table>
+      <thead><tr>${(t.header||[]).map(h=>`<th>${esc(h)}</th>`).join("")}</tr></thead>
+      <tbody>${t.rows.map(r=>`<tr>${r.map(c=>`<td>${cell(c)}</td>`).join("")}</tr>`).join("")}</tbody>
+    </table></div>` : `<p class="note">${esc(opts.empty||"")}</p>`;
+  const notes = t.notes ? `<details class="sop mat-math"><summary>${opts.notesLabel||"Notes"}</summary><p>${cell(t.notes)}</p></details>` : "";
+  return `<h4>${title}</h4>${table}${notes}`;
+}
+/* Material load list — calculated by the material-calculator agent into the job
+   file's ## Materials section; crew-visible (it IS the truck-loading answer). */
+function materialsHTML(j){
+  return tableHTML("🧱 Material load list", j.materials,
+    {cls:"mat", notesLabel:"The math, caveats &amp; ordering notes"});
+}
+/* Readings + Product-usage capture tables — the read side of the field-capture
+   loop (ghost form / drawer forms write them). Claims the queued POLISH item
+   "Drawer: show the Readings / Product-usage capture tables". */
+function captureTablesHTML(j){
+  return tableHTML("🌡 Readings / batch log", j.readings,
+      {empty:"No readings logged yet — the field card and the form below write here."}) +
+    tableHTML("🧪 Product usage · PJA capture", j.usage,
+      {empty:"No product usage logged yet."});
 }
 /* Documents & links — rendered from the record's ## Links bullets (PDS refs etc.);
    http(s) targets are clickable, Sync paths show as labeled paths */
@@ -1004,6 +1021,7 @@ function richDetail(j){
     <h4>The build · products by layer</h4>
     <ul class="layers">${j.buildup.map(l=>`<li><b>${esc(l.layer)}</b> — ${esc(l.product)}<span class="dft">${esc(l.dft)}</span></li>`).join("")}</ul>
     ${materialsHTML(j)}
+    ${captureTablesHTML(j)}
     <h4>⚠ Conditions &amp; spec limits</h4>
     <div class="cond">${esc(j.conditions)}</div>
     <h4>🚩 Critical watch-outs</h4>
@@ -1080,6 +1098,12 @@ function openFieldCard(id){
   const host=document.getElementById("fieldcard");
   const frame=document.getElementById("fieldcard-frame");
   frame.srcdoc=FXC.card.doc(j);
+  // dated who/when for the Site Wire: one read-only commits-page fetch, then
+  // re-render in place (demo/offline/failure resolve null → the derived
+  // milestones stand); refreshFieldCard keeps the reader's scroll position
+  if(!j.history && FXC.data && FXC.data.loadHistory){
+    FXC.data.loadHistory(j).then(h=>{ if(h&&_fcJob===j){ j.history=h; refreshFieldCard(j); } });
+  }
   document.getElementById("fieldcard-title").textContent="Field card · #"+(j.jobNumber||j.id);
   host.classList.add("show");
   // shareable URL while a card is open (replaceState: no history spam, no hashchange echo)
@@ -1089,6 +1113,15 @@ function closeFieldCard(){
   document.getElementById("fieldcard").classList.remove("show");
   document.getElementById("fieldcard-frame").srcdoc="";
   if(/#card=/.test(location.hash)&&history.replaceState) history.replaceState(null,"",location.pathname+location.search);
+}
+/* Re-render the open card without losing the reader's place: a srcdoc swap is a
+   brand-new document at scroll 0 (srcdoc iframes are same-origin, so the offset
+   is readable and restorable once the fresh document loads). */
+function refreshFieldCard(j){
+  const frame=document.getElementById("fieldcard-frame");
+  let y=0; try{ y=frame.contentWindow.document.scrollingElement.scrollTop; }catch(e){}
+  if(y) frame.addEventListener("load",()=>{ try{ frame.contentWindow.scrollTo(0,y); }catch(e){} },{once:true});
+  frame.srcdoc=FXC.card.doc(j);
 }
 /* the "⧉ Copy link" share path: the URL opens this card in the app on any connected
    phone (app-glue consumes #card= after jobs load). Clipboard API needs https/localhost
@@ -1119,7 +1152,7 @@ window.addEventListener("message", function(e){
   const d = e && e.data; if(!d || !d.fxc) return;
   const frame = document.getElementById("fieldcard-frame");
   if(!frame || e.source !== frame.contentWindow) return;      // only our field card
-  if(d.fxc === "capture-close"){ if(_fcJob) frame.srcdoc = FXC.card.doc(_fcJob); return; }
+  if(d.fxc === "capture-close"){ if(_fcJob) refreshFieldCard(_fcJob); return; }
   if(d.fxc !== "capture" || !_fcJob || !window.FXC || !FXC.edit) return;
   const row = d.row || {};
   const usage = (d.kind === "usage" || d.kind === "batch");
@@ -1128,7 +1161,12 @@ window.addEventListener("message", function(e){
     r._origPath = job._meta.path; return r;
   };
   Promise.resolve(FXC.edit.commit(_fcJob, fn, usage ? "product" : "reading")).then(function(ok){
-    if(ok !== false) _fcJob = (window.JOBS || []).find(x => x.id === _fcJob.id) || _fcJob;
+    if(ok !== false){
+      const fresh = (window.JOBS || []).find(x => x.id === _fcJob.id) || _fcJob;
+      // carry the fetched Site Wire history across the post-capture re-parse
+      if(fresh !== _fcJob && !fresh.history && _fcJob.history) fresh.history = _fcJob.history;
+      _fcJob = fresh;
+    }
   });
 });
 

@@ -1,14 +1,15 @@
 /* FXC Field — service worker
  *
- * Strategy:
- *   - SHELL (the static app files): cache-first, so the PWA launches instantly
- *     and works offline. Bump CACHE_VERSION on every deploy to roll the cache.
+ * Strategy (network-first, 2026-07-03 — the CACHE_VERSION ritual is deleted):
+ *   - SHELL (navigations + same-origin asset GETs): NETWORK-FIRST with a short
+ *     timeout. Online phones always run the pushed code — no version to bump,
+ *     no deploy ritual, never a shell behind. Every fresh response refills one
+ *     unversioned cache ("fxc-shell"); on timeout/offline the cached copy
+ *     serves, so the PWA still opens with no signal.
  *   - GitHub REST API (api.github.com): NEVER cached. Those responses carry the
  *     per-device PAT in the request and are live job truth — always hit network.
  *     data.js owns the read-only offline snapshot (localStorage "fxc.cache.jobs"),
  *     not the SW. The SW only refuses to touch GitHub traffic.
- *   - Other GET requests (same-origin assets we didn't pre-list, e.g. an icon
- *     variant): cache-first with a network fallback that fills the cache lazily.
  *
  * No build step: this is a plain static file referenced by FXC.boot()'s
  * navigator.serviceWorker.register('./sw.js').
@@ -16,12 +17,15 @@
 
 'use strict';
 
-// Bump this string on every deploy so clients drop the old shell cache.
-const CACHE_VERSION = 'v10';
-const CACHE_NAME = 'fxc-shell-' + CACHE_VERSION;
+const CACHE_NAME = 'fxc-shell'; // unversioned — network-first keeps it fresh
+
+// How long a fetch may run before the cached copy serves instead (the fetch
+// still completes in the background and refills the cache for next time).
+const NETWORK_TIMEOUT_MS = 2500;
 
 // The complete app shell (relative to the SW scope = the folder it ships in).
-// Keep this in sync with the files referenced by index.html.
+// Keep this in sync with the files referenced by index.html — the harness
+// tripwire (tests/shell-assets.test.js) goes red on drift.
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -46,7 +50,7 @@ function isGitHubApi(url) {
          url.hostname.endsWith('.githubusercontent.com');
 }
 
-// ---- install: pre-cache the shell -----------------------------------------
+// ---- install: pre-cache the shell (first-launch offline still works) --------
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
@@ -63,18 +67,41 @@ self.addEventListener('install', (event) => {
   );
 });
 
-// ---- activate: drop stale caches, take control -----------------------------
+// ---- activate: drop the old versioned caches (fxc-shell-v*), take control ---
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
       .then((names) => Promise.all(
         names
-          .filter((n) => n.startsWith('fxc-shell-') && n !== CACHE_NAME)
+          .filter((n) => n.startsWith('fxc-shell-'))
           .map((n) => caches.delete(n))
       ))
       .then(() => self.clients.claim())
   );
 });
+
+// ---- network-first with cache fallback --------------------------------------
+// cacheKey lets every navigation URL (/, /?demo=1, /#card=2813) share the one
+// cached './index.html' entry instead of fragmenting the fallback per-URL.
+function networkFirst(req, cacheKey) {
+  const key = cacheKey || req;
+  return caches.open(CACHE_NAME).then((cache) =>
+    cache.match(key).then((cached) => {
+      const network = fetch(req).then((res) => {
+        if (res && res.ok) cache.put(key, res.clone());
+        return res;
+      });
+      const timer = new Promise((resolve) => {
+        setTimeout(() => resolve(null), NETWORK_TIMEOUT_MS);
+      });
+      return Promise.race([network.catch(() => null), timer]).then((res) => {
+        if (res) return res;      // fresh (or a real HTTP error — let the page see it)
+        if (cached) return cached; // slow/offline → the cached shell serves
+        return network;            // nothing cached: wait the network out
+      });
+    })
+  );
+}
 
 // ---- fetch: route by destination -------------------------------------------
 self.addEventListener('fetch', (event) => {
@@ -97,42 +124,16 @@ self.addEventListener('fetch', (event) => {
     return; // do not call respondWith -> default network behaviour
   }
 
-  // Navigation requests (the page itself): serve the cached app shell first so
-  // the PWA opens offline; refresh the cached copy in the background when online.
+  // Navigation requests (the page itself): network-first so an online phone
+  // always gets the deployed shell; the cached copy serves offline.
   if (req.mode === 'navigate') {
-    event.respondWith(
-      caches.match('./index.html').then((cached) => {
-        const network = fetch(req)
-          .then((res) => {
-            if (res && res.ok) {
-              const copy = res.clone();
-              caches.open(CACHE_NAME).then((c) => c.put('./index.html', copy));
-            }
-            return res;
-          })
-          .catch(() => cached);
-        return cached || network;
-      })
-    );
+    event.respondWith(networkFirst(req, './index.html'));
     return;
   }
 
-  // Same-origin assets: cache-first, then network (and lazily cache the result).
+  // Same-origin assets: network-first too — one reload = current code.
   if (url.origin === self.location.origin) {
-    event.respondWith(
-      caches.match(req).then((cached) => {
-        if (cached) return cached;
-        return fetch(req)
-          .then((res) => {
-            if (res && res.ok && res.type === 'basic') {
-              const copy = res.clone();
-              caches.open(CACHE_NAME).then((c) => c.put(req, copy));
-            }
-            return res;
-          })
-          .catch(() => cached); // nothing cached + offline -> undefined (browser error)
-      })
-    );
+    event.respondWith(networkFirst(req));
     return;
   }
 

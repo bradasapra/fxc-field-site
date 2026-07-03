@@ -208,30 +208,58 @@
       if (t === "### ACTIVE") { phase = "A"; ag = 0; continue; }
       if (t === "### CLOSEOUT") { phase = "C"; continue; }
       if (phase === "A" && /^\*\*/.test(t)) ag++;
-      if (/^(\s*)- \[ \]/.test(lines[i]) && (phase === "P" || (phase === "A" && ag <= 2))) {
+      // planning gates + active gate 1 only — gate 2 ("Cleared to Apply") stays
+      // open so demoActiveJob's bulk-override advance has items to flip/record
+      if (/^(\s*)- \[ \]/.test(lines[i]) && (phase === "P" || (phase === "A" && ag <= 1))) {
         lines[i] = lines[i].replace("- [ ]", "- [x]");
       }
     }
     return lines.join("\n");
   }
-  /* transform the 2813 record into an ACTIVE Day-2 job + seed a couple in-spec
-     readings (dated 1–2 days back) so the last-reading strip reads neutral and the
-     ghost prefills from a real prior row. Brad's own out-of-spec save then flips it. */
+  /* transform the 2813 record into an ACTIVE Day-2 job by walking the REAL
+     gated chain won → applying (plus the same seeded readings/usage as before)
+     entirely through the engine. Every commit line it emits, parsed back
+     through data.parseCommitLine, becomes the Site Wire's dated who/when
+     (job.history) — the demo wire cannot drift from the live parser. One
+     bulk-override and one revert-with-reason are included so both audit
+     shapes are walkable in ?demo=1. */
   function demoActiveJob(md) {
     var text = md
-      .replace(/^status:.*$/m, "status: applying")
-      .replace(/^phase:.*$/m, "phase: 2-active")
       .replace(/^start_date:.*$/m, "start_date: " + daysAgo(2))
       .replace(/^crew:.*$/m, "crew: [Mike, Tomas, Dylan]");
     text = clearDemoGates(text);
-    var path = "10-jobs/2-active/2813-PF-JD Renovations.md";
+    var path = "10-jobs/1-planning/2813-PF-JD Renovations.md";
     var job = FXC.data.parseJobMarkdown(text, path, "demo");
-    var apply = function (res) { job = FXC.data.parseJobMarkdown(res.newText, path, "demo"); };
-    [
-      { date: daysAgo(2), area: "Slab A - floor", moisture: "3.8", temp: "17", RH: "74", CSP: "3", notes: "prep verified, CSP 3 confirmed" },
-      { date: daysAgo(1), area: "Slab A - floor", moisture: "3.5", temp: "18", RH: "70", CSP: "3", batch: "288-A-2207", dft: "12.0 mils", notes: "base coat + flake broadcast" }
-    ].forEach(function (r) { apply(FXC.data.appendReading(job, r)); });
-    apply(FXC.data.appendProduct(job, { product: "Series 288 Enviro-Pox (Aluminum Gray)", qty: "9 kits (27 gal)", notes: "primer + base to date" }));
+    var trail = [];
+    var wasRole = FXC.state.role;
+    var as = function (name) { FXC.state.role = { name: name, scope: "full" }; };
+    var apply = function (res, date) {
+      if (res.move) path = res.move.toPath; // deployed crosses 1-planning → 2-active
+      trail.push({ msg: res.message, date: date });
+      job = FXC.data.parseJobMarkdown(res.newText, path, "demo");
+    };
+    try {
+      as("Brad");
+      [["package-building", 9], ["scope-locked", 8], ["scheduled", 6], ["cleared-to-deploy", 3], ["deployed", 2]]
+        .forEach(function (s) { apply(FXC.data.setStatus(job, s[0]), daysAgo(s[1])); });
+      as("Dan");
+      apply(FXC.data.setStatus(job, "prepping"), daysAgo(2));
+      // "Cleared to Apply" was left open by clearDemoGates → the bulk-override records its count
+      apply(FXC.data.setStatus(job, "applying", { bulk: true }), daysAgo(1));
+      apply(FXC.data.setStatus(job, "prepping", { back: true, reason: "flash rust on the east bay — re-prep" }), daysAgo(1));
+      apply(FXC.data.setStatus(job, "applying"), daysAgo(0));
+      as("Mike");
+      [
+        { date: daysAgo(2), area: "Slab A - floor", moisture: "3.8", temp: "17", RH: "74", CSP: "3", notes: "prep verified, CSP 3 confirmed" },
+        { date: daysAgo(1), area: "Slab A - floor", moisture: "3.5", temp: "18", RH: "70", CSP: "3", batch: "288-A-2207", dft: "12.0 mils", notes: "base coat + flake broadcast" }
+      ].forEach(function (r) { apply(FXC.data.appendReading(job, r), r.date); });
+      apply(FXC.data.appendProduct(job, { product: "Series 288 Enviro-Pox (Aluminum Gray)", qty: "9 kits (27 gal)", notes: "primer + base to date" }), daysAgo(1));
+    } finally { FXC.state.role = wasRole; }
+    job.history = trail.map(function (t) {
+      var e = FXC.data.parseCommitLine(t.msg);
+      if (e) e.date = t.date;
+      return e;
+    }).filter(Boolean).reverse(); // newest first, like the live commits page
     return job;
   }
 

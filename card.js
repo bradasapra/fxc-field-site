@@ -937,6 +937,34 @@
     return '<div class="witem"><div class="wtag' + (tagClass ? " " + tagClass : "") + '">' + esc(tag) +
       '</div><div class="wbub"><div class="wt">' + esc(label) + '</div><div class="wb">' + bodyHtml + "</div></div></div>";
   }
+
+  /* ---- the card-feed mapper: parsed commit-trail events (data.parseCommitLine
+     shapes, via data.loadHistory or the demo seeds) → milestone items. Keeps
+     status advances (who+when; bulk-overrides carry their count), reverts (with
+     the reason) and non-money field sets. Row appends + gate ticks are skipped —
+     the tables above already render them. MONEY KEYS NEVER PASS: the worker card
+     shows no financials (Brad 2026-07-02); harness-asserted. Pure + node-safe. */
+  var MONEY_KEYS = { quote_value: 1, deposit_amount: 1, deposit_received: 1, invoiced: 1 };
+  card.historyMilestones = function (events) {
+    var out = [];
+    (events || []).forEach(function (e) {
+      if (!e || !e.verb) return;
+      if (e.verb === "advance") {
+        out.push({ date: e.date || "", tag: "✓", label: "Advanced · " + (e.role || "FXC"),
+          body: "<b>" + esc(e.from) + " → " + esc(e.to) + "</b>" +
+            (e.bulkCount ? " — " + e.bulkCount + " gate item" + (e.bulkCount === 1 ? "" : "s") +
+              " bulk-confirmed (not verified item-by-item)" : "") });
+      } else if (e.verb === "revert") {
+        out.push({ date: e.date || "", tag: "↩", label: "Reverted · " + (e.role || "FXC"),
+          body: "<b>" + esc(e.from) + " → " + esc(e.to) + "</b>" +
+            (e.reason ? " — " + esc(e.reason) : "") });
+      } else if (e.verb === "set" && !MONEY_KEYS[e.key]) {
+        out.push({ date: e.date || "", tag: "✎", label: "Updated · " + (e.role || "FXC"),
+          body: "<b>" + esc(e.key || "") + "</b>" + (e.value ? " " + esc(e.value) : " cleared") });
+      }
+    });
+    return out;
+  };
   function tSiteWire(job) {
     var top = [], days = [], miles = [];
 
@@ -981,7 +1009,18 @@
       top.push(wireItem("", "USE", "Product usage · PJA capture", '<div class="wusage">' + urs + "</div>"));
     }
 
-    /* milestones — frontmatter dates + gate state; no stored per-event timestamps → undated */
+    /* milestones — dated who/when from the commit trail when history was
+       fetched (job.history = parseCommitLine'd events, newest first); the
+       standalone export bakes whatever was fetched at generation time. The
+       derived items below stay as-is — no history → undated, unchanged. */
+    card.historyMilestones(job.history)
+      .sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); })
+      .forEach(function (h) {
+        miles.push(wireItem("sys", h.tag,
+          (h.date ? shortDate(h.date) + " · " : "") + h.label, h.body));
+      });
+
+    /* frontmatter dates + gate state; no stored per-event timestamps → undated */
     var gi = (job._meta && job._meta.gateIndex) || [];
     gi.forEach(function (g) {
       var d = 0; g.boxes.forEach(function (b) { if (b.checked) d++; });
@@ -1024,7 +1063,9 @@
     } else {
       cap = '<div class="capnote">Capture opens once the job is active on site.</div>';
     }
-    return '<div class="span2">' + out.join("") + cap + "</div>";
+    /* capture leads the wire (Brad 2026-07-03): strip + bar sit right under the
+       "Site Wire · #" header, the feed reads down from there */
+    return '<div class="span2">' + cap + out.join("") + "</div>";
   }
 
   /* ===== ASSEMBLE ===== */
@@ -1041,8 +1082,8 @@
       tCrew(job) + tMaterial(job) +
       tPrep(job) + tPhotos(job) + tLinks(job) +
       '<div class="ledgerhead span2">Site Wire · ' + esc(job.jobNumber) + "</div>" +
-      // Site Wire is the card's closing section — it ends on the +Reading/+Batch/+Photo bar, per the
-      // 10-site-wire design. It supersedes the flat tReadings/tUsage/tGateHistory tiles. tSpec dropped
+      // Site Wire is the card's closing section — it OPENS on the +Reading/+Batch/+Photo bar (moved
+      // up from the tail, Brad 2026-07-03). It supersedes the flat tReadings/tUsage/tGateHistory tiles. tSpec dropped
       // too: it duplicated the Buildup tile up top (products-by-layer). tMoney omitted — worker/crew
       // card shows NO financials (Brad 2026-07-02). tReadings/tUsage/tGateHistory/tSpec/tMoney are kept
       // defined below but unwired (reserved for a future role-gated PM/office variant, phase G).
