@@ -188,6 +188,8 @@
   .card .datechip.done{color:#c9f0d0;background:rgba(63,185,80,.15);border-color:rgba(63,185,80,.35)}
   .chip.ck{color:var(--ink-dim)}
   .chip.ck.ok{color:#fff;background:var(--green);border-color:var(--green)}
+  .chip.bad{color:#ffd9d6;background:rgba(229,83,75,.18);border-color:rgba(229,83,75,.4)}
+  body.theme-light .chip.bad{color:#8f1f18;background:rgba(229,83,75,.14);border-color:rgba(229,83,75,.35)}
   .bar{height:6px;background:#0c1014;border-radius:999px;margin-top:8px;overflow:hidden;border:1px solid var(--line)}
   .bar > i{display:block;height:100%;background:var(--accent-grad-h)}
   .bar.g > i{background:linear-gradient(90deg,var(--green),#7ee08a)}
@@ -362,7 +364,8 @@
   <div class="fieldcard-bar">
     <span id="fieldcard-title">Field card</span>
     <div class="fieldcard-bar-actions">
-      <button id="fieldcard-copy" onclick="exportFieldCard()" title="Save a self-contained file to share with the crew">⬇ Save worker card</button>
+      <button id="fieldcard-link" onclick="copyFieldCardLink()" title="Copy a link that opens this card in the app (phone must be connected)">⧉ Copy link</button>
+      <button id="fieldcard-copy" onclick="exportFieldCard()" title="Save a self-contained file to share with someone who doesn't have the app">⬇ Save file</button>
       <button onclick="closeFieldCard()">✕ Close</button>
     </div>
   </div>
@@ -535,6 +538,17 @@ function dateState(j){
   const d = j.dates && (j.dates.deadline || j.dates.start || j.dates.requested);
   return (d && d < TODAY) ? "over" : "";
 }
+/* Feature C — the same capture recency as one Board chip, from the shared
+   FXC.card.captureState (active-phase jobs only; red only when a reading saved
+   today is out of spec). Cannot drift from the card strip — neither stores state. */
+function capChip(j){
+  if(!window.FXC||!FXC.card||!FXC.card.captureState) return "";
+  let cs; try{ cs=FXC.card.captureState(j); }catch(e){ return ""; }
+  if(!cs.active) return "";
+  if(cs.outOfSpecToday) return `<span class="chip bad" title="A reading saved today is out of spec">⚠ out of spec</span>`;
+  if(cs.last&&cs.last.date) return `<span class="chip" title="Last reading ${esc(cs.last.date)}">🖊 last read ${esc(cs.last.date.slice(5))}</span>`;
+  return `<span class="chip">no readings</span>`;
+}
 function cardHTML(j){
   const pr = cardProgress(j);
   const cover = j.cover ? `<div class="cover" style="background-image:url('${esc(j.cover)}')"></div>` : "";
@@ -554,7 +568,7 @@ function cardHTML(j){
     <div class="jobno">${j.jobNumber?("#"+esc(j.jobNumber)):"—"}${j.on_hold?` · <span class="holdflag">ON HOLD</span>`:""}${moved}</div>
     ${stage}
     <div class="cust">${esc(j.customer||j.title)}</div>
-    <div class="meta">${sys}${sqft}${ck}${att}</div>
+    <div class="meta">${sys}${sqft}${ck}${att}${capChip(j)}</div>
     ${money_}
     <div class="datechip ${dateState(j)}">🕒 ${keyDate(j)}</div>
     ${bar}
@@ -1068,12 +1082,59 @@ function openFieldCard(id){
   frame.srcdoc=FXC.card.doc(j);
   document.getElementById("fieldcard-title").textContent="Field card · #"+(j.jobNumber||j.id);
   host.classList.add("show");
+  // shareable URL while a card is open (replaceState: no history spam, no hashchange echo)
+  if(history.replaceState) history.replaceState(null,"","#card="+encodeURIComponent(j.jobNumber||j.id));
 }
-function closeFieldCard(){ document.getElementById("fieldcard").classList.remove("show"); document.getElementById("fieldcard-frame").srcdoc=""; }
+function closeFieldCard(){
+  document.getElementById("fieldcard").classList.remove("show");
+  document.getElementById("fieldcard-frame").srcdoc="";
+  if(/#card=/.test(location.hash)&&history.replaceState) history.replaceState(null,"",location.pathname+location.search);
+}
+/* the "⧉ Copy link" share path: the URL opens this card in the app on any connected
+   phone (app-glue consumes #card= after jobs load). Clipboard API needs https/localhost
+   — matches everywhere the app is served; execCommand covers older WebKit. */
+function copyFieldCardLink(){
+  const j=_fcJob; if(!j) return;
+  const url=location.origin+location.pathname+location.search+"#card="+encodeURIComponent(j.jobNumber||j.id);
+  const btn=document.getElementById("fieldcard-link"); const label=btn?btn.textContent:"";
+  const done=ok=>{ if(btn){ btn.textContent=ok?"✓ Copied":"Copy failed"; setTimeout(()=>{ btn.textContent=label; },1600); } };
+  if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(url).then(()=>done(true),()=>done(false)); }
+  else{ const ta=document.createElement("textarea"); ta.value=url; document.body.appendChild(ta); ta.select();
+    let ok=false; try{ ok=document.execCommand("copy"); }catch(e){} ta.remove(); done(ok); }
+}
+/* pasting/tapping a #card= link while the app is already open */
+window.addEventListener("hashchange",()=>{
+  const m=/[#&]card=([^&]+)/.exec(location.hash||""); if(!m) return;
+  const v=decodeURIComponent(m[1]);
+  const j=(window.JOBS||[]).find(x=>String(x.jobNumber)===v||String(x.id)===v);
+  if(j) openFieldCard(j.id);
+});
+
+/* Ghost-Row Capture plumbing: the field-card iframe posts one row per Save; hand it
+   to the EXISTING engine (appendReading/appendProduct via edit.commit) — one row =
+   one single-line role-stamped commit. The form stays open for fluid back-to-back
+   entry; we refresh the card's srcdoc only when it closes so the Site Wire + strip
+   (and, via replaceJob's re-render, the Board chip) catch up. */
+window.addEventListener("message", function(e){
+  const d = e && e.data; if(!d || !d.fxc) return;
+  const frame = document.getElementById("fieldcard-frame");
+  if(!frame || e.source !== frame.contentWindow) return;      // only our field card
+  if(d.fxc === "capture-close"){ if(_fcJob) frame.srcdoc = FXC.card.doc(_fcJob); return; }
+  if(d.fxc !== "capture" || !_fcJob || !window.FXC || !FXC.edit) return;
+  const row = d.row || {};
+  const usage = (d.kind === "usage" || d.kind === "batch");
+  const fn = function(job){
+    const r = usage ? FXC.data.appendProduct(job, row) : FXC.data.appendReading(job, row);
+    r._origPath = job._meta.path; return r;
+  };
+  Promise.resolve(FXC.edit.commit(_fcJob, fn, usage ? "product" : "reading")).then(function(ok){
+    if(ok !== false) _fcJob = (window.JOBS || []).find(x => x.id === _fcJob.id) || _fcJob;
+  });
+});
 
 /* Export the field card as a single self-contained HTML file (photos inlined as
-   base64 so it works anywhere — Sync share, email, double-click). This IS the
-   worker-link artifact; post-deploy this becomes a live deep-link instead. */
+   base64 so it works anywhere — Sync share, email, double-click). The no-app share
+   path; connected phones get the live #card= deep link via "⧉ Copy link" above. */
 function toDataUri(url){
   return fetch(url).then(r=>r.blob()).then(b=>new Promise(res=>{
     const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.onerror=()=>res(url); fr.readAsDataURL(b);

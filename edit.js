@@ -89,6 +89,8 @@
       ".fxc-form label{display:block;font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-faint);font-weight:700;margin:8px 0 3px}" +
       ".fxc-form input,.fxc-form textarea{width:100%;padding:11px 10px;font-size:16px;border:1px solid var(--line);border-radius:9px;background:var(--panel);color:var(--ink)}" +
       ".fxc-form textarea{min-height:64px;resize:vertical}" +
+      ".fxc-form select{width:100%;padding:11px 10px;font-size:16px;border:1px solid var(--line);border-radius:9px;background:var(--panel);color:var(--ink)}" +
+      ".fxc-nocoat{margin-top:6px;width:100%;padding:8px;font-size:12px;font-weight:700;border:1px solid var(--line);border-radius:8px;background:var(--panel2);color:var(--ink-dim);cursor:pointer}" +
       ".fxc-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:90;padding:12px 18px;border-radius:10px;font-size:14px;font-weight:600;box-shadow:var(--shadow);max-width:90%;text-align:center}" +
       ".fxc-toast.ok{background:var(--green);color:#08210d}" +
       ".fxc-toast.err{background:var(--red);color:#2a0a08}" +
@@ -365,10 +367,13 @@
         html += logButton("reading", "+ Log a reading");
         html += '<div class="fxc-form" id="fxc-form-reading">' +
           '<div class="grid">' +
-            field("rd-area", "Area", "text") + field("rd-batch", "Batch #", "text") +
+            field("rd-area", "Area", "text") +
+            '<div><label>Batch # (one or more)</label><input id="rd-batch" type="text" placeholder="e.g. 288-A-2207, 248-C-1130"></div>' +
             field("rd-moist", "Moisture %", "decimal") + field("rd-temp", "Temp °C", "decimal") +
-            field("rd-rh", "RH %", "decimal") + field("rd-csp", "CSP", "text") +
-            field("rd-dft", "WFT/DFT", "text") + field("rd-date", "Date", "date") +
+            field("rd-rh", "RH %", "decimal") +
+            '<div><label>CSP</label><select id="rd-csp"><option value=""></option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option><option>9</option></select></div>' +
+            '<div><label>WFT / DFT</label><input id="rd-dft" type="text"><button type="button" class="fxc-nocoat" id="rd-nocoat">no coating applied</button></div>' +
+            field("rd-date", "Date", "date") +
           "</div>" +
           '<label>Notes</label><textarea id="rd-notes"></textarea>' +
           '<button class="fxc-btn" id="fxc-save-reading">Save reading</button></div>';
@@ -497,6 +502,8 @@
         batch: val(wrap, "#rd-batch"), dft: val(wrap, "#rd-dft"), notes: val(wrap, "#rd-notes")
       };
     }, function (j, row) { var r = data().appendReading(j, row); r._origPath = j._meta.path; return r; });
+    var noc = wrap.querySelector("#rd-nocoat");
+    if (noc) noc.onclick = function () { var el = wrap.querySelector("#rd-dft"); if (el) el.value = "no coating applied"; };
 
     // product
     bindSave(wrap, "#fxc-save-product", "product", function () {
