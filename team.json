@@ -1,0 +1,9 @@
+{
+  "_comment": "FXC Field roster. Edit this list to add/remove people. 'owner' and 'pm' get FULL edit (everything). 'crew' get FIELD scope (active jobs only: gate boxes, readings, product, notes, advance the active flow). Keep names short — they appear on the role-picker tiles and get stamped onto every git commit. After editing, commit this file in GitHub Desktop (or re-upload to tiny.host) and crew will see the new tiles on their next cold open.",
+  "roster": [
+    { "name": "Brad", "role": "owner" },
+    { "name": "Dan", "role": "pm" },
+    { "name": "Mike", "role": "crew" },
+    { "name": "Sara", "role": "crew" }
+  ]
+}

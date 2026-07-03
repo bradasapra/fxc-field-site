@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="FXC Field">
+  <!-- Maskable-safe: content stays inside the central 80% safe zone.
+       FX Coating mark: three stacked coating layers (Style Guide: DD5061 / AB5491 / 7A5896). -->
+  <rect width="512" height="512" fill="#101114"/>
+  <g stroke-width="28" stroke-linejoin="round" fill="none">
+    <path d="M256 96  L412 181 L256 266 L100 181 Z" stroke="#DD5061"/>
+    <path d="M100 266 L256 181 L412 266 L256 351 Z" stroke="#AB5491"/>
+    <path d="M100 351 L256 266 L412 351 L256 436 Z" stroke="#7A5896"/>
+  </g>
+</svg>
