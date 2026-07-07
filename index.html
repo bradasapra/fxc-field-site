@@ -157,8 +157,11 @@
   /* pipeline (proven-process map) */
   .pl-link{border-left:2px dashed var(--line);margin:0 0 0 14px;padding:7px 0 7px 12px;font-size:10.5px;color:var(--amber);line-height:1.45}
   .pl-node{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-weight:700;font-size:13px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
-  .pl-chip{background:var(--accent-grad);color:#fff;border-radius:999px;padding:2px 9px;font-size:10.5px;font-weight:800;cursor:pointer}
+  .pl-chip{background:var(--accent-grad);color:#fff;border-radius:999px;padding:2px 9px;font-size:10.5px;font-weight:800;cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none}
   .pl-chip.hold{background:var(--amber);color:#221a05}
+  .pl-chip .ini{opacity:.8}
+  .pl-chip.dragging{opacity:.35}
+  .pl-node.drop-target{outline:2px dashed var(--accent);outline-offset:-3px;background:#1a2129}
   .col{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px;min-height:90px;transition:background .12s,outline-color .12s}
   .col h3{margin:0 0 10px;font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--ink-dim);display:flex;align-items:center;gap:8px}
   .col h3 .dot{width:9px;height:9px;border-radius:50%}
@@ -178,7 +181,7 @@
   .card .jobno{font-size:11px;color:var(--ink-faint);font-weight:700;letter-spacing:.4px}
   .card .cust{font-weight:700;font-size:14px;margin:2px 0 7px;line-height:1.25}
   .card .meta{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
-  .chip{background:#0e1216;border:1px solid var(--line);border-radius:6px;padding:2px 7px;font-size:10.5px;color:var(--ink-dim);white-space:nowrap}
+  .chip{background:#0e1216;border:1px solid var(--line);border-radius:6px;padding:2px 7px;font-size:10.5px;color:var(--ink-dim);white-space:nowrap;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis}
   .chip.sys{color:var(--accent)}
   .chip.att{color:var(--blue)}
   .card .money{font-size:13px;color:var(--ink);font-weight:600}
@@ -255,7 +258,7 @@
   /* condensed glance block — design-card density, house style (Brad 06-12) */
   .glance{border:1px solid var(--line);border-radius:11px;background:var(--panel2);padding:10px 12px;margin-bottom:4px}
   .g-line{font-size:13.5px;margin-bottom:7px;color:var(--ink)}
-  .g-sys{display:inline-block;margin-left:6px;padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:800;letter-spacing:.4px;color:#fff;background:linear-gradient(90deg,var(--fx-red,#DD5061),var(--fx-magenta,#AB5491),var(--fx-purple,#7A5896))}
+  .g-sys{display:inline-block;margin-left:6px;padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:800;letter-spacing:.4px;color:#fff;background:linear-gradient(90deg,var(--fx-red,#DD5061),var(--fx-magenta,#AB5491),var(--fx-purple,#7A5896));max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
   .g-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 14px;font-size:12.5px;color:var(--ink-dim)}
   .g-grid a{color:var(--blue,#58a6ff)}
   .g-dates{grid-column:1 / -1}
@@ -804,18 +807,28 @@ const PIPELINE = [
     {st:"closed", gate:"⚡ Job CLOSED — warranty PDF + final invoice cleared"}
   ]}
 ];
+/* "Greg Kustermans" -> "GK" — the chips are too small for names, so they read
+   #2822·GK; the full name stays in the tooltip (Brad 2026-07-07) */
+function initialsOf(name){
+  return String(name||"").trim().split(/[\s\-–—_./]+/)
+    .filter(w=>/^[A-Za-z]/.test(w)).slice(0,3)
+    .map(w=>w[0].toUpperCase()).join("");
+}
 function viewPipeline(){
   const SL = (window.FXC && FXC.data && FXC.data.STAGE_LABELS) || {};
   const cols = PIPELINE.map(ph=>{
     const rows = ph.steps.map(s=>{
       const here = JOBS.filter(j=>j.status===s.st);
-      const chips = here.map(j=>`<span class="pl-chip${j.on_hold?" hold":""}" onclick="openJob('${j.id}')" title="${esc(j.customer||j.title)}">#${esc(j.jobNumber)}${j.on_hold?" ⏸":""}</span>`).join("");
+      const chips = here.map(j=>{
+        const ini = initialsOf(j.customer||j.title);
+        return `<span class="pl-chip${j.on_hold?" hold":""}" onclick="cardClick('${j.id}')" onpointerdown="plChipDown(event,'${j.id}')" title="${esc(j.customer||j.title)}">#${esc(j.jobNumber)}${ini?`·<span class="ini">${ini}</span>`:""}${j.on_hold?" ⏸":""}</span>`;
+      }).join("");
       return `<div class="pl-link">${esc(s.gate)}</div>
-        <div class="pl-node">${esc(SL[s.st]||s.st)}${chips}</div>`;
+        <div class="pl-node" data-status="${esc(s.st)}">${esc(SL[s.st]||s.st)}${chips}</div>`;
     }).join("");
     return `<div class="col"><h3><span class="dot" style="background:${ph.color}"></span>${ph.phase}<span class="count">${esc(ph.folder)}</span></h3>${rows}</div>`;
   }).join("");
-  return `<p class="hint">The FX Proven Process — every job walks this exact path. A ⚡ gate must be 100% checked before the next step unlocks (the same gates as each job's checklists, straight from the fxc-brain playbooks). Jobs appear as chips at their current step — tap one to open it.</p>
+  return `<p class="hint">The FX Proven Process — every job walks this exact path. A ⚡ gate must be 100% checked before the next step unlocks (the same gates as each job's checklists, straight from the fxc-brain playbooks). Jobs appear as chips at their current step — tap one to open it · drag it to another step to move it (long-press to lift on a phone); every move confirms its gates before anything is written.</p>
     <div class="cols b4">${cols}</div>`;
 }
 
@@ -859,12 +872,29 @@ function cardDown(e, id){
         requestMove(id); }, 380) };
   }
 }
+/* pipeline chips: mouse-drag from anywhere on the chip; touch long-press LIFTS
+   the chip for dragging (touch-action:none on .pl-chip keeps the browser from
+   stealing the gesture for scrolling); a plain tap still opens the job. */
+function plChipDown(e, id){
+  if(e.button && e.button!==0) return;
+  const chipEl = e.currentTarget;
+  const job = JOBS.find(x=>x.id===id);
+  if(!job) return;
+  if(e.pointerType==="mouse"){
+    press = { id, cardEl:chipEl, sx:e.clientX, sy:e.clientY, type:"mouse" };
+  } else {
+    press = { id, cardEl:chipEl, sx:e.clientX, sy:e.clientY, type:"touch",
+      timer: setTimeout(()=>{ press=null; suppressClickUntil=Date.now()+450;
+        if(navigator.vibrate) try{navigator.vibrate(12);}catch(_){}
+        beginDrag(e, chipEl, job); }, 380) };
+  }
+}
 function clearPress(){ if(press){ if(press.timer) clearTimeout(press.timer); press=null; } }
 function cardClick(id){ if(Date.now()<suppressClickUntil) return; openJob(id); }
 function moveCloneTo(x,y){ if(drag&&drag.clone){ drag.clone.style.left=(x-drag.offX)+"px"; drag.clone.style.top=(y-drag.offY)+"px"; } }
 function highlight(x,y){
   const el=document.elementFromPoint(x,y);
-  const col=el?el.closest(".col[data-bucket]"):null;
+  const col=el?(el.closest(".pl-node[data-status]")||el.closest(".col[data-bucket]")):null;
   if(col!==drag.lastCol){
     if(drag.lastCol) drag.lastCol.classList.remove("drop-target");
     if(col) col.classList.add("drop-target");
@@ -893,13 +923,29 @@ function endDrag(commit){
   const d=drag; drag=null;
   if(d.clone) d.clone.remove();
   if(d.cardEl) d.cardEl.classList.remove("dragging");
-  document.querySelectorAll(".col.drop-target").forEach(c=>c.classList.remove("drop-target"));
+  document.querySelectorAll(".col.drop-target,.pl-node.drop-target").forEach(c=>c.classList.remove("drop-target"));
+  if(commit && d.lastCol && d.lastCol.dataset.status){
+    // pipeline step node — an EXACT status target, not a bucket column
+    const st = d.lastCol.dataset.status;
+    if(window.FXC && FXC.edit && FXC.edit.handleStatusDrop && FXC.edit.handleStatusDrop(d.job, st)) return;
+    applyStatusMove(d.job, st);
+    return;
+  }
   if(commit && d.lastCol && d.lastCol.dataset.bucket){
     const ds = { bucket:d.lastCol.dataset.bucket, stage:d.lastCol.dataset.stage, period:d.lastCol.dataset.period };
     // live vault jobs: gated move via the confirm popup (edit.js); demo/history: v1 sandbox
     if(window.FXC && FXC.edit && FXC.edit.handleDrop && FXC.edit.handleDrop(d.job, ds)) return;
     applyMove(d.job, ds);
   }
+}
+/* sandbox fallback (demo/history cards): reposition the chip locally, mirroring
+   the status onto the v1 bucket/stage so Board/Closeout agree with the chip */
+function applyStatusMove(job, st){
+  job.status = st;
+  const D = window.FXC && FXC.data;
+  const b = D && D.STATUS_BUCKET ? D.STATUS_BUCKET[st] : null;
+  if(b) applyMove(job, b==="closeout" ? {bucket:b, stage:(D.STAGE_LABELS||{})[st]} : {bucket:b});
+  else render();
 }
 function requestMove(id){
   const j = JOBS.find(x=>x.id===id);
@@ -1114,6 +1160,16 @@ function closeFieldCard(){
   document.getElementById("fieldcard-frame").srcdoc="";
   if(/#card=/.test(location.hash)&&history.replaceState) history.replaceState(null,"",location.pathname+location.search);
 }
+/* app-glue calls this after an offline-queue flush lands: re-render the OPEN
+   card so the Site Wire shows the synced rows and the pending badge clears */
+function refreshOpenFieldCard(){
+  const host=document.getElementById("fieldcard");
+  if(!host||!host.classList.contains("show")||!_fcJob) return;
+  const fresh=(window.JOBS||[]).find(x=>x.id===_fcJob.id)||_fcJob;
+  if(fresh!==_fcJob&&!fresh.history&&_fcJob.history) fresh.history=_fcJob.history;
+  _fcJob=fresh;
+  refreshFieldCard(_fcJob);
+}
 /* Re-render the open card without losing the reader's place: a srcdoc swap is a
    brand-new document at scroll 0 (srcdoc iframes are same-origin, so the offset
    is readable and restorable once the fresh document loads). */
@@ -1156,7 +1212,7 @@ window.addEventListener("message", function(e){
   if(!frame || e.source !== frame.contentWindow) return;      // only our field card
   if(d.fxc === "capture-close"){ if(_fcJob) refreshFieldCard(_fcJob); return; }
   if(d.fxc !== "capture") return;
-  const ack = (ok, err) => { try{ frame.contentWindow.postMessage({fxc:"capture-ack", id:d.id, ok:ok, err:err}, "*"); }catch(e){} };
+  const ack = (ok, err, queued) => { try{ frame.contentWindow.postMessage({fxc:"capture-ack", id:d.id, ok:ok, err:err, queued:!!queued}, "*"); }catch(e){} };
   // the iframe is waiting on an ack — never leave it hanging on a guard exit
   if(!window.FXC || !FXC.edit){ ack(false, "the app isn't ready — reload and retry."); return; }
   if(!_fcJob){ ack(false, "no job is open — reload the card."); return; }
@@ -1167,16 +1223,21 @@ window.addEventListener("message", function(e){
     r._origPath = job._meta.path; return r;
   };
   // serialize saves so a back-to-back save always starts from the refreshed job
-  // (no self-conflict 409s), and ack the iframe only once the commit settles
+  // (no self-conflict 409s), and ack the iframe only once the commit settles.
+  // queueRow opts the capture kinds into the offline queue: a dead-signal save
+  // comes back ok+queued (amber ack) instead of a red failure.
   window._fcQueue = (window._fcQueue || Promise.resolve()).then(function(){
-    return Promise.resolve(FXC.edit.commit(_fcJob, fn, usage ? "product" : "reading")).then(function(ok){
-      if(ok !== false){
+    let queued = false;
+    return Promise.resolve(FXC.edit.commit(_fcJob, fn, usage ? "product" : "reading", {
+      queueRow: row, onQueued: function(){ queued = true; }
+    })).then(function(ok){
+      if(ok !== false && !queued){
         const fresh = (window.JOBS || []).find(x => x.id === _fcJob.id) || _fcJob;
         // carry the fetched Site Wire history across the post-capture re-parse
         if(fresh !== _fcJob && !fresh.history && _fcJob.history) fresh.history = _fcJob.history;
         _fcJob = fresh;
       }
-      ack(ok !== false, ok === false ? "the app refused or the write failed (see the app banner)." : undefined);
+      ack(ok !== false, ok === false ? "the app refused or the write failed (see the app banner)." : undefined, queued);
     }, function(err){
       ack(false, (err && err.message) || "write failed.");
     });
@@ -1238,6 +1299,7 @@ document.addEventListener("keydown",e=>{ if(e.key==="Escape"){ closeFieldCard();
 <script src="./card.js"></script>
 <script src="./demo-jobs.js"></script>
 <script src="./identity.js"></script>
+<script src="./queue.js"></script>
 <script src="./edit.js"></script>
 <script src="./app-glue.js"></script>
 </body>

@@ -253,11 +253,20 @@
     return job && job.bucket === "active";
   }
 
+  /* v1 offline capture carve-out (Brad ruling 2026-07-07): the append-only
+     capture kinds may QUEUE while offline — they replay safely from a fresh
+     parse. Everything else (gates, status, fields, money) stays read-only
+     offline: replaying those against state that moved is how the vault
+     gets corrupted. Role rules below still apply unchanged — crew remains
+     active-job-only, offline or on. */
+  var OFFLINE_QUEUEABLE = { reading: 1, product: 1, note: 1 };
+
   function canEdit(job, field, opts) {
     if (!job || !field) return false;
 
     var mode = (window.FXC && window.FXC.state && window.FXC.state.mode) || null;
-    if (mode === "demo" || mode === "offline") return false; // preview / offline => read-only
+    if (mode === "demo") return false;                        // preview => read-only
+    if (mode === "offline" && !OFFLINE_QUEUEABLE[field]) return false; // offline => capture-only
 
     var role = getRole();
     if (!role) return false;                  // no actor chosen

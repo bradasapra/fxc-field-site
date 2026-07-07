@@ -118,6 +118,10 @@
       ".fxc-tg-row input[type=checkbox]{width:auto;margin-top:3px;accent-color:var(--fx-purple,#7A5896)}" +
       ".fxc-tg-when{flex:none;background:var(--panel);border:1px solid var(--line);color:var(--ink-dim);border-radius:7px;font-size:11px;padding:3px 6px;margin-top:1px}" +
       ".fxc-tg-at{width:100%;margin:2px 0 4px;padding:8px 10px;font-size:14px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink)}" +
+      ".fxc-fold{margin:0 0 12px}" +
+      ".fxc-fold summary{cursor:pointer;font-size:12.5px;font-weight:600;color:var(--ink-dim);padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)}" +
+      ".fxc-fold summary:hover{border-color:var(--accent)}" +
+      ".fxc-fold[open] summary{margin-bottom:8px}" +
       ".fxc-gateline.click{cursor:pointer}" +
       ".fxc-gateline.click:hover{border-color:var(--accent)}" +
       ".fxc-gateline .go{float:right;color:var(--ink-faint);font-weight:800}" +
@@ -147,7 +151,7 @@
   }
   function findBoxAbsLine(job, gateName, boxText) {
     var found = -1, want = String(boxText).trim();
-    (job._meta.gateIndex || []).forEach(function (g) {
+    ((job._meta && job._meta.gateIndex) || []).forEach(function (g) {
       if (g.gateName === gateName) {
         g.boxes.forEach(function (b) { if (String(b.text).trim() === want) found = b.absLine; });
       }
@@ -156,7 +160,7 @@
   }
   function gateByMatch(job, re) {
     var hit = null;
-    (job._meta.gateIndex || []).forEach(function (g) {
+    ((job._meta && job._meta.gateIndex) || []).forEach(function (g) {
       if (re.test(g.gateName) && !hit) hit = g;
     });
     return hit;
@@ -178,11 +182,22 @@
      ============================================================ */
   edit.commit = function (job, transformFn, field, opts) {
     opts = opts || {};
-    if (FXC.state && FXC.state.mode === "demo") return demoCommit(job, transformFn);
+    if (FXC.state && FXC.state.mode === "demo") return demoCommit(job, transformFn); // demo never queues
     if (!auth().canEdit(job, field, opts)) {
       app().toast && app().toast("Your role can't make that change.", "err");
       return Promise.resolve(false);
     }
+
+    /* offline mode: no PUT to attempt — queue straight away. Runs BEFORE the
+       transform because snapshot jobs (offline boot) carry no _meta and can't
+       run one; the queue builds the capture-time commit line from the grammar
+       instead. Non-queueable fields were already denied by canEdit above. */
+    if (FXC.state && FXC.state.mode === "offline") {
+      var q = queueCapture(job, field, opts, null);
+      if (!q) app().toast && app().toast("Offline — this change couldn't be queued. Reconnect and retry.", "err");
+      return Promise.resolve(q);
+    }
+
     var res;
     try { res = transformFn(job); }
     catch (e) { app().toast && app().toast((e && e.message) || "Edit failed.", "err"); return Promise.resolve(false); }
@@ -190,10 +205,35 @@
     return writeOnce(job._meta.path, job._meta.sha, res, transformFn)
       .then(function (applied) { return applied; })
       ["catch"](function (e) {
+        /* Failure classification (offline queue v1): a DEFINITIVE network
+           failure is a fetch rejection — it carries no .status; every HTTP
+           refusal (409/401/422…) does. Only the former auto-queues (Brad
+           ruling 2026-07-07) — an ack TIMEOUT never reaches this catch, so
+           slow-but-landed writes can't be double-queued. */
+        if (!(e && e.status) && queueCapture(job, field, opts, res)) return true;
         app().toast && app().toast(friendlyErr(e), "err");
         return false;
       });
   };
+
+  /* Hand a queueable capture to FXC.queue. Only fires when the caller opted
+     in by passing the raw form row (opts.queueRow) — gates/status/field
+     edits never pass one. The commit message is snapshotted NOW (from the
+     transform when it ran, else from the queue's grammar mirror); the
+     stored author rides with it. Resolves the commit as true — the form
+     clears exactly as on a landed save, with the amber ack instead. */
+  function queueCapture(job, field, opts, res) {
+    if (!opts || !opts.queueRow) return false;
+    var q = FXC.queue;
+    if (!q || !q.add) return false;
+    var message = res ? res.message : (q.messageFor ? q.messageFor(field, job, opts.queueRow) : null);
+    if (!message) return false;
+    var entry = q.add({ job: job, kind: field, row: opts.queueRow, message: message });
+    if (!entry) return false;
+    if (typeof opts.onQueued === "function") { try { opts.onQueued(entry); } catch (e) {} }
+    app().toast && app().toast("Queued — will sync when signal returns (" + q.count() + " pending).", "info");
+    return true;
+  }
 
   function writeOnce(path, sha, res, transformFn) {
     var wopts = res.move ? { move: res.move } : {};
@@ -276,10 +316,11 @@
       wrap.innerHTML = '<div class="fxc-note-banner">Preview — connect your repo to edit real jobs.</div>';
       dbody.appendChild(wrap); return;
     }
-    if (mode === "offline") {
-      wrap.innerHTML = '<div class="fxc-note-banner">Offline — showing last synced data. Editing is disabled until you reconnect.</div>';
-      dbody.appendChild(wrap); return;
-    }
+    /* offline: the drawer stays open — canEdit's capture carve-out hides
+       everything except the queueable forms (readings/batch/note), which
+       save into the offline queue (2026-07-07). Gates, status, schedule
+       and money render nothing offline. */
+    var offline = mode === "offline";
     if (job.source !== "fxc-pm" || !job.rich) {
       wrap.innerHTML = '<div class="fxc-note-banner">History card — read-only. New jobs flow through the live vault and are fully editable.</div>';
       dbody.appendChild(wrap); return;
@@ -294,10 +335,12 @@
 
     var html = "";
     if (demoRich) html += '<div class="fxc-note-banner" style="margin-bottom:12px">Preview of the real #' + esc(job.jobNumber) + ' record — tap anything; changes apply here only, nothing is saved.</div>';
+    if (offline) html += '<div class="fxc-note-banner" style="margin-bottom:12px">Offline — showing last synced data. Readings, batches and notes still save; they queue here and sync when signal returns.</div>';
 
-    /* ---- current-phase gate checklist ---- */
+    /* ---- current-phase gate checklist ----
+       (offline snapshot jobs carry no _meta — the gate index is simply absent) */
     var phaseName = currentPhaseName(job);
-    var phaseGates = (job._meta.gateIndex || []).filter(function (g) { return g.phase === phaseName; });
+    var phaseGates = ((job._meta && job._meta.gateIndex) || []).filter(function (g) { return g.phase === phaseName; });
     if (phaseGates.length) {
       html += "<h4>" + esc(phaseName) + " checklist</h4>";
       phaseGates.forEach(function (g, gi) {
@@ -516,7 +559,7 @@
       var text = val(wrap, "#nt-text");
       if (!text) { app().toast && app().toast("Type a note first.", "err"); return; }
       var fn = function (j) { var r = data().appendNote(j, text); r._origPath = j._meta.path; return r; };
-      edit.commit(job, fn, "note");
+      edit.commit(job, fn, "note", { queueRow: { text: text } });
     };
 
     // schedule (one commit per changed field — keeps each write a single-line edit)
@@ -564,7 +607,7 @@
   }
   function phaseFromGate(job, gateName) {
     var p = "Active";
-    (job._meta.gateIndex || []).forEach(function (g) { if (g.gateName === gateName) p = g.phase; });
+    ((job._meta && job._meta.gateIndex) || []).forEach(function (g) { if (g.gateName === gateName) p = g.phase; });
     return p;
   }
   function bindSave(wrap, sel, field, getRow, transform) {
@@ -573,7 +616,9 @@
     b.onclick = function () {
       var row = getRow();
       var fn = function (j) { return transform(j, row); };
-      edit.commit(wrap._job || jobOf(wrap), fn, field);
+      // queueRow opts the capture forms into the offline queue: a dead-signal
+      // save queues with the amber ack instead of failing red
+      edit.commit(wrap._job || jobOf(wrap), fn, field, { queueRow: row });
     };
   }
   function jobOf(wrap) {
@@ -871,19 +916,33 @@
         (h.ready ? " complete" : " checked") + ' <span class="go">›</span></div>';
     }).join("");
 
+    /* a LONG jump (>3 gated steps — a pipeline drag can cross phases in one go)
+       trades the per-item checkbox detail for the trigger list: triggers lead,
+       the checkpoint lines fold behind a one-line summary (Brad 2026-07-07) */
+    var compact = hops.length > 3;
+    /* "Check all & advance" bypass (Brad 2026-07-02): full scope only (never
+       crew — canEdit "gate-bulk"); every open item on the way is flipped in the
+       advance commit itself, recorded as a bulk-confirm so the audit trail
+       shows the items weren't verified one-by-one. */
+    var canBulk = ((FXC.state && FXC.state.mode) || null) === "demo" || auth().canEdit(job, "gate-bulk");
+    var openCount = states.reduce(function (a, h) {
+      return a + (h.gate ? h.gate.boxes.filter(function (b) { return !b.checked; }).length : 0);
+    }, 0);
+
     var body;
     if (allReady) {
       body = willDoHTML(job, hops);
+    } else if (compact) {
+      var blockedN = states.filter(function (h) { return !h.ready; }).length;
+      body = '<div class="fxc-will"><span class="miss">' + openCount + " item" + (openCount === 1 ? "" : "s") +
+        " still open across " + blockedN + " checkpoint" + (blockedN === 1 ? "" : "s") + ".</span><br>" +
+        '<span class="soon">Too many steps for an item-by-item review — expand the checkpoints above to work them, or Check all: every open item is ticked in its step\'s commit, recorded as a bulk-confirm.</span>' +
+        '<div class="fxc-btnrow">' +
+        '<button class="fxc-btn sec" id="fxc-cf-open">Open the checklist →</button>' +
+        (canBulk ? '<button class="fxc-btn" id="fxc-cf-bulk">✓ Check all &amp; advance</button>' : "") +
+        "</div></div>";
     } else {
       var left = firstBlocked.gate.boxes.filter(function (b) { return !b.checked; });
-      /* "Check all & advance" bypass (Brad 2026-07-02): full scope only (never
-         crew — canEdit "gate-bulk"); every open item on the way is flipped in the
-         advance commit itself, recorded as a bulk-confirm so the audit trail
-         shows the items weren't verified one-by-one. */
-      var canBulk = ((FXC.state && FXC.state.mode) || null) === "demo" || auth().canEdit(job, "gate-bulk");
-      var openCount = states.reduce(function (a, h) {
-        return a + (h.gate ? h.gate.boxes.filter(function (b) { return !b.checked; }).length : 0);
-      }, 0);
       body = '<div class="fxc-will"><span class="miss">Blocked at “' + esc(firstBlocked.gate.gateName) + '” — still to do:</span><br>' +
         left.slice(0, 5).map(function (b) { return "• " + esc(b.text); }).join("<br>") +
         (left.length > 5 ? "<br>…" : "") +
@@ -897,8 +956,16 @@
           " get ticked in the advance commit itself, recorded as a bulk-confirm (not verified item-by-item).</span>" : "") +
         "</div>";
     }
+    var doneItems = states.reduce(function (a, h) { return a + (h.progress ? h.progress.done : 0); }, 0);
+    var totalItems = states.reduce(function (a, h) { return a + (h.progress ? h.progress.total : 0); }, 0);
+    var gatesBlock = compact
+      ? '<details class="fxc-fold"><summary>' + hops.length + " gated steps · " + doneItems + "/" + totalItems +
+        " checkpoint items done — show them</summary>" + gateLines + "</details>"
+      : gateLines;
     var goLabel = (hops.length > 1 ? "Advance " + hops.length + " steps to " : "Advance to ") + esc(stageLabel(target)) + " →";
-    var sh = sheet(head + dropped + gateLines + body + triggersHTML(job, hops) +
+    var sh = sheet(head + dropped +
+      (compact ? triggersHTML(job, hops) + gatesBlock + body
+               : gatesBlock + body + triggersHTML(job, hops)) +
       '<button class="fxc-btn" id="fxc-cf-go"' + (allReady ? "" : " disabled") + ">" + goLabel + "</button>" +
       '<button class="fxc-btn sec" id="fxc-cf-cancel">Cancel</button>');
     var go = sh.querySelector("#fxc-cf-go");
@@ -1097,6 +1164,20 @@
       return true;
     }
     edit.confirmMove(job, next, { droppedOn: ds.stage || ds.bucket });
+    return true;
+  };
+
+  /* Pipeline-view drop: chips land on an EXACT status node, not a bucket
+     column. Same contract as handleDrop — true = handled here (live/demo vault
+     jobs, gated popup); false = let the v1 sandbox reposition the chip. */
+  edit.handleStatusDrop = function (job, targetStatus) {
+    var mode = (FXC.state && FXC.state.mode) || null;
+    if ((mode !== "live" && mode !== "demo") || !isVaultJob(job)) return false;
+    if (!targetStatus || targetStatus === job.status) return true; /* no-op */
+    var hops = chainTo(job, targetStatus);
+    if (hops && hops.length) { edit.confirmMove(job, targetStatus); return true; }
+    /* not forward-reachable on the one-way chain = a backward correction */
+    backwardSheet(job, targetStatus, stageLabel(targetStatus));
     return true;
   };
 

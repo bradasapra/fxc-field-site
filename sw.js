@@ -34,6 +34,7 @@ const SHELL_ASSETS = [
   './card.js',
   './demo-jobs.js',
   './identity.js',
+  './queue.js',
   './edit.js',
   './app-glue.js',
   './manifest.webmanifest',

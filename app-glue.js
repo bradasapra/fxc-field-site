@@ -164,10 +164,66 @@
     var who = (auth().getRole && auth().getRole()) ? auth().getRole().name : null;
     var line;
     if (mode === "demo") line = "FXC Field — preview (sample data). Connect your private repo to manage real jobs.";
-    else if (mode === "offline") line = "FXC Field — offline. Showing last synced data" + (who ? " for " + who : "") + ". Editing disabled.";
+    else if (mode === "offline") line = "FXC Field — offline. Showing last synced data" + (who ? " for " + who : "") + ". Capture still saves — it queues until signal returns.";
     else line = "FXC Field — live · " + n + " job" + (n === 1 ? "" : "s") + " from your vault" + (who ? " · signed in as " + who : "") + ".";
     f.textContent = line;
+    /* pending offline saves: amber badge + the manual "Sync now" trigger */
+    var qn = (FXC.queue && FXC.queue.count) ? FXC.queue.count() : 0;
+    if (qn && mode !== "demo") {
+      var b = document.createElement("button");
+      b.id = "fxc-syncnow";
+      b.textContent = "⏳ " + qn + " queued" + (lastFlushError ? " — sync failed" : "") + " · Sync now";
+      b.setAttribute("style", "margin-left:10px;padding:2px 10px;border-radius:999px;border:1px solid var(--amber);" +
+        "background:transparent;color:var(--amber);font:inherit;font-size:11px;cursor:pointer;vertical-align:middle");
+      b.onclick = function () { flushQueue("manual"); };
+      f.appendChild(document.createTextNode(" "));
+      f.appendChild(b);
+    }
   }
+
+  /* ============================================================
+     OFFLINE QUEUE — flush triggers + result surfacing
+     (queue.js owns the store + flush engine; this is the wiring:
+     "online" event, post-boot, manual Sync now — see FXC.boot)
+     ============================================================ */
+  var lastFlushError = null;
+
+  /* a corrupt store was dropped at load — say so LOUDLY, once */
+  function surfaceRecovery() {
+    var q = FXC.queue;
+    var rec = q && q.lastRecovery;
+    if (!rec || !rec.dropped) return;
+    q.lastRecovery = null;
+    var n = rec.dropped;
+    app.toast && app.toast(n + " queued offline save" + (n === 1 ? "" : "s") +
+      " couldn't be read and " + (n === 1 ? "was" : "were") + " dropped — re-enter " + (n === 1 ? "it" : "them") + ".", "err");
+  }
+
+  function flushQueue(trigger) {
+    var q = FXC.queue;
+    if (!q || !q.flush) return Promise.resolve(null);
+    surfaceRecovery();
+    if (!q.count()) { setFooter(); return Promise.resolve(null); }
+    return q.flush().then(function (r) {
+      if (!r) return r;
+      lastFlushError = (r.error && !r.locked) ? r.error : null;
+      if (r.synced) {
+        app.toast && app.toast("✓ " + r.synced + " offline save" + (r.synced === 1 ? "" : "s") + " synced to the vault.", "ok");
+        // re-render an open field card: fresh Site Wire, pending badge cleared
+        if (typeof root.refreshOpenFieldCard === "function") { try { root.refreshOpenFieldCard(); } catch (e) {} }
+      }
+      /* failures: always loud on a manual tap or a token/scope problem;
+         a quiet "still no signal" on auto triggers just keeps the badge */
+      if (r.error && !r.locked && (trigger === "manual" || r.authError || r.blocked)) {
+        app.toast && app.toast(r.error, (r.authError || r.blocked) ? "err" : "info");
+      }
+      setFooter();
+      /* the queue drained while we were on the snapshot — signal is back, go live */
+      if (FXC.state.mode === "offline" && r.synced && !r.remaining) loadLive();
+      return r;
+    });
+  }
+  app.flushQueue = flushQueue; // manual Sync now + console access
 
   /* ============================================================
      MODES
@@ -301,11 +357,13 @@
       reRender();
       auth().renderChip(chipTap);
       openDeepLink();
+      flushQueue("boot"); // captures queued on dead signal replay now
     })["catch"](function () {
       var snap = FXC.data.loadSnapshot && FXC.data.loadSnapshot();
       if (snap && snap.length) {
         root.JOBS = snap; FXC.state.mode = "offline"; reRender();
-        banner("Offline — showing last synced data. Editing disabled until you reconnect.", "warn");
+        banner("Offline — showing last synced data. Readings, batches and notes still save; they'll sync when signal returns.", "warn");
+        surfaceRecovery();
         openDeepLink();
       } else {
         enterDemo();
@@ -444,6 +502,13 @@
     if ("serviceWorker" in navigator) {
       try { navigator.serviceWorker.register("./sw.js")["catch"](function () {}); } catch (e) {}
     }
+    /* offline-queue triggers: flush when the signal returns (navigator.onLine
+       is only a hint — the flush itself proves connectivity by fetching);
+       repaint the footer badge on every queue change */
+    try {
+      root.addEventListener("online", function () { if (FXC.state.mode !== "demo") flushQueue("online"); });
+      if (FXC.queue && FXC.queue.onChange) FXC.queue.onChange(function () { setFooter(); });
+    } catch (e) {}
     wrapOpenJob();
     loadTeam().then(route, route);
   };

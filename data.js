@@ -86,9 +86,31 @@
   data._utf8ToB64 = utf8ToB64;
   data._b64ToUtf8 = b64ToUtf8;
 
+  /* strip a YAML inline comment from a scalar value. For a quoted scalar,
+     anything after the closing quote is comment/noise per YAML (the vault's
+     `coating_system: "[[FX Shield]]" # note` idiom); for a plain scalar a "#"
+     preceded by whitespace starts the comment. */
+  function stripComment(s) {
+    if (s == null) return "";
+    var v = String(s).trim();
+    if (!v) return v;
+    var a = v[0];
+    if (a === '"' || a === "'") {
+      var close = v.indexOf(a, 1);
+      return close > 0 ? v.slice(0, close + 1) : v;
+    }
+    if (a === "#") return "";
+    return v.replace(/\s+#.*$/, "").trim();
+  }
+
   function stripWiki(s) {
     if (s == null) return "";
-    return String(s).replace(/^\s*["']?\s*\[\[\s*/, "").replace(/\s*\]\]\s*["']?\s*$/, "").trim();
+    var v = unquote(stripComment(s));
+    // unwrap every [[wiki link]]; the alias form [[page|alias]] shows the alias
+    v = v.replace(/\[\[([^\]|]*)(?:\|([^\]]*))?\]\]/g, function (_, page, alias) {
+      return (alias || page).trim();
+    });
+    return v.trim();
   }
 
   /* unwrap a single layer of surrounding quotes from a scalar frontmatter value */
@@ -113,7 +135,7 @@
   /* a "blank-ish" frontmatter value: empty, [], false, null */
   function fmStr(v) {
     if (v == null) return "";
-    var s = unquote(v);
+    var s = unquote(stripComment(v));
     if (s === "" || s === "[]" || s === "null") return "";
     return s;
   }
@@ -1300,10 +1322,15 @@
       ["catch"](function () { return null; });
   };
 
-  /* writeJob: PUT contents with sha; optional {move}. Returns {sha}. */
+  /* writeJob: PUT contents with sha; optional {move}. Returns {sha}.
+     opts.author overrides the live-role author — a queued offline write
+     flushed later (or by whoever holds the phone then) must carry its
+     CAPTURE-time stamp, not the flusher's (queue.js, 2026-07-07). */
   data.writeJob = function (path, newText, sha, message, opts) {
     opts = opts || {};
-    var author = { name: role(), email: "field@fxcoating.ca" };
+    var author = opts.author
+      ? { name: opts.author.name, email: opts.author.email || "field@fxcoating.ca" }
+      : { name: role(), email: "field@fxcoating.ca" };
 
     if (opts.move) {
       // phase-folder move: PUT new path (NO sha) THEN DELETE old path

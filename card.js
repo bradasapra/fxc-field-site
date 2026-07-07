@@ -217,6 +217,7 @@
     '.capstrip .csval{color:var(--ink);}',
     '.capstrip.alarm{background:#fdecec;border-color:#f4b6b6;color:#8f2020;}',
     '.capstrip.alarm .dotm{background:#d64545;}',
+    '.capqueued{margin:6px 6px 0;padding:8px 12px;border-radius:10px;background:#fdf3e0;border:1px solid #ecd3a0;color:#7a5a10;font-size:11.5px;font-weight:700;}',
     /* --- ghost capture form (Feature A) --- */
     '.capov{position:fixed;inset:0;z-index:60;background:rgba(20,19,22,.5);display:flex;align-items:flex-end;justify-content:center;}',
     '.capov[hidden]{display:none;}',
@@ -768,7 +769,11 @@
     var pushP = function (p) { p = String(p || "").trim(); if (p && !pseen[p]) { pseen[p] = 1; products.push(p); } };
     (((job && job.materials) || {}).rows || []).forEach(function (r) { pushP(r[0]); });
     (((job && job.usage) || {}).rows || []).forEach(function (r) { pushP(r[0]); });
-    return { seed: seed, areas: areas, products: products, spec: card.parseSpecLimits((job && job.conditions) || "") };
+    // pending offline saves for THIS job, seeded at render; the controller
+    // keeps its own live count as queued acks arrive (queue.js may not be
+    // loaded in node tests / standalone exports — badge just stays hidden)
+    var q = (root.FXC && root.FXC.queue && root.FXC.queue.count) ? root.FXC.queue.count(job && job.jobNumber) : 0;
+    return { seed: seed, areas: areas, products: products, spec: card.parseSpecLimits((job && job.conditions) || ""), queued: q };
   };
 
   function stepMarkup(key, label, unit) {
@@ -863,27 +868,42 @@
        "Saved ✓" even when the write failed — indistinguishable from data loss).
        Field values are kept on failure so the row can be retried. */
     var seq = 0, pending = null, ackTimer = null;
-    function foot(msg, isErr) { var f = $("capfoot"); f.textContent = msg; f.style.color = isErr ? "#e2606b" : ""; }
+    /* tone: true/"err" red · "amber" queued-offline · falsy default */
+    function foot(msg, tone) { var f = $("capfoot"); f.textContent = msg; f.style.color = tone === "amber" ? "#9a6a00" : (tone ? "#e2606b" : ""); }
     function setSaving(on) { $("capsave").disabled = on; if (on) foot("Saving…", false); }
-    function settle(ok, err) {
+    /* pending-offline badge: seeded from CAP.queued at render, bumped live
+       as queued acks arrive (a flush refresh re-renders the whole card) */
+    var qcount = CAP.queued || 0;
+    function paintQueued() {
+      var el = $("capqueued"); if (!el) return;
+      el.hidden = !qcount;
+      el.textContent = "⏳ " + qcount + " save" + (qcount === 1 ? "" : "s") + " waiting for signal — they'll sync on their own";
+    }
+    paintQueued();
+    function settle(ok, err, queued) {
       if (!pending) return;
       var p = pending; pending = null;
       if (ackTimer) { clearTimeout(ackTimer); ackTimer = null; }
       setSaving(false);
       if (!ok) { foot("✗ Not saved — " + (err || "couldn't reach the vault. Fix the connection and tap Save again."), true); return; }
+      /* queued offline: the row is safe — clear the form exactly as on a
+         landed save, but say QUEUED (amber), never "Saved" (green) */
+      if (queued) { qcount++; paintQueued(); }
+      var msg = queued ? "Queued ✓ — will sync when signal returns" : "Saved ✓ — next row ready";
+      var tone = queued ? "amber" : false;
       if (p.kind === "reading") {
         reghost(p.row);
         $("c-notes").value = ""; $("c-dft").value = ""; /* the no-coating chip must never ride into the next row */
-        foot("Saved ✓ — next row ready", false); verdict();
+        foot(msg, tone); verdict();
       } else {
         $("u-qty").value = ""; $("u-notes").value = "";
-        foot("Saved ✓ — next row ready", false);
+        foot(msg, tone);
       }
     }
     window.addEventListener("message", function (e) {
       var d = e && e.data;
       if (!d || d.fxc !== "capture-ack" || !pending || d.id !== pending.id) return;
-      settle(d.ok !== false, d.err);
+      settle(d.ok !== false, d.err, d.queued === true);
     });
     function save() {
       if (pending) return; /* one in-flight save at a time */
@@ -1091,6 +1111,7 @@
       cap = strip +
         '<div class="capbar"><div class="capbtn primary" id="cap-reading">+ Reading</div>' +
         '<div class="capbtn" id="cap-batch">+ Batch</div><div class="capbtn">+ Photo</div></div>' +
+        '<div class="capqueued" id="capqueued" hidden></div>' + // pending offline saves (controller paints)
         '<div class="capnote">each Save writes one role-stamped row to the vault · + Photo coming</div>';
     } else {
       cap = '<div class="capnote">Capture opens once the job is active on site.</div>';
