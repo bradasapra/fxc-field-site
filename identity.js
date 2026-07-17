@@ -467,7 +467,12 @@
     var ov = overlayShell("fxc-role-overlay");
     var card = cardShell(460);
 
-    var fullTiles = isCrewDevice() ? "" : FULL_ROLES.map(function (n) {
+    /* hide Brad/Dan when the device is crew-flagged OR the app was opened via a
+       worker link THIS visit (a full-scope device isn't permanently flagged by
+       someone else's link, but the picker it shows must still be crew-only —
+       Brad 2026-07-17: "I could still select brad or dan") */
+    var crewView = isCrewDevice() || /[#&]crew(=1)?(&|$)/.test((window.location && window.location.hash) || "");
+    var fullTiles = crewView ? "" : FULL_ROLES.map(function (n) {
       var sub = FULL_SUBS[n] || "PM · full edit";
       return roleTile(n, sub, "full");
     }).join("");

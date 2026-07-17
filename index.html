@@ -679,7 +679,10 @@ function viewBoard(){
       ${gateLine}${btn}
     </div>`;
   }).join("") : `<div class="empty">No booked jobs waiting</div>`;
-  const rosterCol = `<div class="col roster">
+  /* data-status="won": Roster IS the won status, so it's an exact-status drop
+     target — dragging a later job here opens the backward-correction sheet
+     (it was previously not a drop target at all: Brad 2026-07-17) */
+  const rosterCol = `<div class="col roster" data-status="won">
     <h3 onclick="toggleRoster()" style="cursor:pointer" title="Show/hide the roster">
       <span class="dot" style="background:var(--purple)"></span>Roster<span class="count">${roster.length}</span><span class="ros-tgl">${rosterOpen?"▾":"▸"}</span></h3>
     ${rosterOpen?rosterRows:""}</div>`;
@@ -894,7 +897,7 @@ function cardClick(id){ if(Date.now()<suppressClickUntil) return; openJob(id); }
 function moveCloneTo(x,y){ if(drag&&drag.clone){ drag.clone.style.left=(x-drag.offX)+"px"; drag.clone.style.top=(y-drag.offY)+"px"; } }
 function highlight(x,y){
   const el=document.elementFromPoint(x,y);
-  const col=el?(el.closest(".pl-node[data-status]")||el.closest(".col[data-bucket]")):null;
+  const col=el?(el.closest(".pl-node[data-status]")||el.closest(".col[data-status]")||el.closest(".col[data-bucket]")):null;
   if(col!==drag.lastCol){
     if(drag.lastCol) drag.lastCol.classList.remove("drop-target");
     if(col) col.classList.add("drop-target");

@@ -371,6 +371,7 @@
     }
 
     /* ---- advance status ---- */
+    var statusHdrShown = false;
     var next = nextStatusOf(job);
     if (next) {
       var T = data().TRANSITIONS[next];
@@ -379,6 +380,7 @@
       var canStat = can("status", { toStatus: next });
       var label = "Advance to " + (data().STAGE_LABELS[next] || next) + " →";
       if (canStat) {
+        statusHdrShown = true;
         html += '<h4>Status</h4>';
         /* blocked + full scope → offer the check-all bypass side by side (same
            rules as the move popup: canEdit "gate-bulk", never crew; the open
@@ -396,6 +398,15 @@
           if (!ready && g) html += '<div class="fxc-hint">Finish “' + esc(g.gateName) + '” first.</div>';
         }
       }
+    }
+    /* backward correction from the drawer — the reliable path on a phone (board
+       cards long-press into the move picker, but the drawer itself had no way
+       back — Brad 2026-07-17). Opens the reason sheet with the full Back-to
+       picker. */
+    var prevSt = statusBefore(job.status);
+    if (prevSt && !offline && (demoRich || can("status-back"))) {
+      if (!statusHdrShown) html += '<h4>Status</h4>';
+      html += '<button class="fxc-btn sec" id="fxc-move-back">← Move back to ' + esc(stageLabel(prevSt)) + '…</button>';
     }
 
     /* ---- field logs (reading / product / note) — readings are on-site captures,
@@ -536,6 +547,9 @@
         edit.commit(job, fnB, "gate-bulk", { toStatus: nextB });
       };
     }
+    // backward correction (reason sheet + Back-to picker)
+    var backBtn = wrap.querySelector("#fxc-move-back");
+    if (backBtn) backBtn.onclick = function () { edit.confirmBack(job, statusBefore(job.status)); };
 
     // reading
     bindSave(wrap, "#fxc-save-reading", "reading", function () {
