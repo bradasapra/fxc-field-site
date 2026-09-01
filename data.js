@@ -1181,6 +1181,146 @@
   };
 
   /* ============================================================
+     DAY-CLOSE INTAKE BUILDERS (write-once proposals rail)
+     Contract of record:
+     fxc-pm/proposals/from-field/2026-07-17-day-close-intake-spec.md
+     These render the intake FILE — they never touch job state. The
+     content is fully determined at capture time, which is what lets
+     the offline queue replay it verbatim (no refetch, no re-run).
+     ============================================================ */
+
+  var INTAKE_DIR = "proposals/from-field/day-close/";
+  var INTAKE_PATH_RE = /^proposals\/from-field\/day-close\/[A-Za-z0-9._-]+\.md$/;
+  data.INTAKE_DIR = INTAKE_DIR;
+
+  var DC_SIGNALS = { prepping: 1, applying: 1, destaging: 1, "walkthrough-done": 1, "final-day": 1 };
+  data.DC_SIGNALS = DC_SIGNALS;
+
+  /* <job#>-<UTCstamp>-<4-char rand> — the comment-spec cid grammar */
+  function mkCid(job, createdIso, rand) {
+    var stamp = String(createdIso || "").replace(/[-:]/g, "").replace(/\.\d+(?=Z$)/, "");
+    var alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+    var pick = typeof rand === "function" ? rand : Math.random;
+    var r = "";
+    for (var i = 0; i < 4; i++) r += alphabet[Math.floor(pick() * alphabet.length) % alphabet.length];
+    return job + "-" + stamp + "-" + r;
+  }
+  data._mkCid = mkCid; // exposed for tests
+
+  function fmQuote(v) { return '"' + String(v == null ? "" : v).replace(/"/g, "") + '"'; }
+
+  /* money values ride verbatim minus obvious formatting ($, commas). A
+     value that isn't numeric after that stays quoted verbatim — the sweep
+     surfaces it; NOTHING here guesses. */
+  function fmMoney(v) {
+    var s = String(v == null ? "" : v).trim().replace(/^\$/, "");
+    var plain = s.replace(/,/g, "");
+    if (/^\d+(\.\d+)?$/.test(plain)) return plain;
+    return fmQuote(s);
+  }
+
+  /* ---- buildDayCloseFile(spec, opts) -> {path, content, message, cid} ----
+     spec: {job, date, who, role, signal, created, productsVersion, cid?,
+            rows: [{code,qty,unit,batch}], off: [{item,amount,bucket,currency}]}
+     Pure. An empty qty lands as CONFIRM — never 0, never a blocked save
+     (Brad resolves CONFIRMs at sweep). Codes ride VERBATIM (the 222-trap).
+     opts.rand injects the cid randomness for tests. */
+  data.buildDayCloseFile = function (spec, opts) {
+    spec = spec || {}; opts = opts || {};
+    var job = String(spec.job || "").trim();
+    if (!job) throw new Error("day-close: job number is required");
+    var signal = String(spec.signal || "").trim();
+    if (!DC_SIGNALS[signal]) throw new Error("day-close: unknown signal \"" + signal + "\"");
+    var created = String(spec.created || "").trim();
+    if (!created) throw new Error("day-close: created timestamp is required");
+    var cid = spec.cid || mkCid(job, created, opts.rand);
+    var rows = (spec.rows || []).filter(function (r) { return r && String(r.code || "").trim(); });
+    var off = (spec.off || []).filter(function (r) { return r && String(r.item || "").trim(); });
+
+    var L = [];
+    L.push("---");
+    L.push("type: day-close");
+    L.push("cid: " + fmQuote(cid));
+    L.push("job: " + fmQuote(job));
+    L.push("date: " + fmQuote(spec.date || ""));
+    L.push("who: " + fmQuote(spec.who || ""));
+    L.push("role: " + fmQuote(spec.role || ""));
+    L.push("signal: " + signal);
+    L.push("created: " + fmQuote(created));
+    if (spec.productsVersion != null) L.push("products_version: " + spec.productsVersion);
+    L.push("---");
+    L.push("");
+    L.push("## Usage");
+    L.push("| code | qty | unit | batch |");
+    L.push("|------|-----|------|-------|");
+    rows.forEach(function (r) {
+      var qty = String(r.qty == null ? "" : r.qty).trim() || "CONFIRM";
+      L.push("| " + [r.code, qty, r.unit, r.batch].map(escapeCell).join(" | ") + " |");
+    });
+    if (off.length) {
+      L.push("");
+      L.push("## Off-master");
+      L.push("| item | amount | bucket | currency |");
+      L.push("|------|--------|--------|----------|");
+      off.forEach(function (r) {
+        var amt = String(r.amount == null ? "" : r.amount).trim() || "CONFIRM";
+        L.push("| " + [r.item, amt, r.bucket, r.currency].map(escapeCell).join(" | ") + " |");
+      });
+    }
+    var detail = rows.length + " product" + (rows.length === 1 ? "" : "s") +
+      (off.length ? " + " + off.length + " off-master" : "") + " · " + signal;
+    return {
+      path: INTAKE_DIR + cid + ".md",
+      content: L.join("\n") + "\n",
+      message: "[" + role() + "] day-close " + job + " — " + detail,
+      cid: cid
+    };
+  };
+
+  /* ---- buildDayCloseMoneyFile(spec, opts) -> {path, content, message, cid} ----
+     spec: {job, who, role, created, deposit_amount, deposit_received,
+            invoice_amount, cid?}. Frontmatter-only, type day-close-money —
+     a SEPARATE file so the role split is structural (crew tokens never
+     produce this type; writeIntake refuses it below full scope). Blank
+     fields are OMITTED — the sweep asks, nothing guesses a zero. The
+     commit message names the fields, never the values. */
+  data.buildDayCloseMoneyFile = function (spec, opts) {
+    spec = spec || {}; opts = opts || {};
+    var job = String(spec.job || "").trim();
+    if (!job) throw new Error("day-close money: job number is required");
+    var created = String(spec.created || "").trim();
+    if (!created) throw new Error("day-close money: created timestamp is required");
+    var cid = spec.cid || mkCid(job, created, opts.rand);
+
+    var money = [];
+    if (String(spec.deposit_amount == null ? "" : spec.deposit_amount).trim() !== "")
+      money.push("deposit_amount: " + fmMoney(spec.deposit_amount));
+    if (String(spec.deposit_received == null ? "" : spec.deposit_received).trim() !== "")
+      money.push("deposit_received: " + fmQuote(String(spec.deposit_received).trim()));
+    if (String(spec.invoice_amount == null ? "" : spec.invoice_amount).trim() !== "")
+      money.push("invoice_amount: " + fmMoney(spec.invoice_amount));
+    if (!money.length) throw new Error("day-close money: enter at least one of deposit amount, deposit date, invoiced total");
+
+    var L = [];
+    L.push("---");
+    L.push("type: day-close-money");
+    L.push("cid: " + fmQuote(cid));
+    L.push("job: " + fmQuote(job));
+    L.push("who: " + fmQuote(spec.who || ""));
+    L.push("role: " + fmQuote(spec.role || ""));
+    L.push("created: " + fmQuote(created));
+    money.forEach(function (m) { L.push(m); });
+    L.push("---");
+    var fields = money.map(function (m) { return m.split(":")[0]; }).join(" · ");
+    return {
+      path: INTAKE_DIR + cid + ".md",
+      content: L.join("\n") + "\n",
+      message: "[" + role() + "] day-close-money " + job + " — " + fields,
+      cid: cid
+    };
+  };
+
+  /* ============================================================
      GITHUB REST CLIENT
      ============================================================ */
 
@@ -1417,6 +1557,50 @@
     }).then(function (res) {
       if (!res.ok) return res.text().then(function (t) { throw mkErr(res.status, "removeStaleDuplicate", t); });
       return true;
+    });
+  };
+
+  /* ---- writeIntake(path, content, message, opts) : PUT WITHOUT sha into
+          the day-close landing slot ONLY (allowlist — the app can never
+          write elsewhere in the proposals tree, let alone job files, from
+          this path). GitHub 422s a sha-less PUT on an existing path, so
+          the write-once cid guarantee is PLATFORM-enforced; a 422 resolves
+          {alreadyExists:true} — at offline replay that means "the earlier
+          flush landed", making the queue lane idempotent.
+          opts: {author?, kind?} — kind "day-close-money" is refused below
+          full scope (belt; the money strip never renders for crew — the
+          harness locks both). author follows writeJob's capture-stamp
+          override rule. ---- */
+  data.writeIntake = function (path, content, message, opts) {
+    opts = opts || {};
+    if (!INTAKE_PATH_RE.test(String(path || ""))) {
+      return Promise.reject(new Error("writeIntake: refused — path outside " + INTAKE_DIR + " (" + path + ")"));
+    }
+    if (opts.kind === "day-close-money") {
+      var scope = FXC.state && FXC.state.role && FXC.state.role.scope;
+      if (scope !== "full") {
+        var eScope = new Error("writeIntake: closeout money is full scope (Brad/Dan) only");
+        eScope.scopeError = true;
+        return Promise.reject(eScope);
+      }
+    }
+    if (!content || !message) return Promise.reject(new Error("writeIntake: empty content or message"));
+    var author = opts.author
+      ? { name: opts.author.name, email: opts.author.email || "field@fxcoating.ca" }
+      : { name: role(), email: "field@fxcoating.ca" };
+    var body = {
+      message: message,
+      content: utf8ToB64(content),
+      branch: _cfg.branch,
+      author: author,
+      committer: author
+    };
+    return fetch(ghBase() + "/contents/" + encodePath(path), {
+      method: "PUT", headers: ghHeaders(), body: JSON.stringify(body)
+    }).then(function (res) {
+      if (res.status === 422) return { alreadyExists: true }; // write-once: this cid already landed
+      if (!res.ok) return res.text().then(function (t) { throw mkErr(res.status, "writeIntake", t); });
+      return res.json().then(function (j) { return { sha: j.content && j.content.sha }; });
     });
   };
 

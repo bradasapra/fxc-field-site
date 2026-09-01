@@ -510,7 +510,13 @@
       if (FXC.queue && FXC.queue.onChange) FXC.queue.onChange(function () { setFooter(); });
     } catch (e) {}
     wrapOpenJob();
-    loadTeam().then(route, route);
+    /* products.json rides alongside team.json — both are best-effort:
+       a failed load degrades the Day-Close picker, never blocks boot */
+    var loads = [loadTeam()];
+    if (FXC.products && FXC.products.load) {
+      try { loads.push(FXC.products.load()); } catch (e) {}
+    }
+    Promise.all(loads).then(route, route);
   };
 
   /* auto-run once the DOM + all module scripts are parsed */

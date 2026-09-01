@@ -45,7 +45,20 @@
      boot banner — but always return a usable empty queue. */
   queue.lastRecovery = null;
 
+  /* day-close intake entries carry the FULL rendered file — content was
+     determined at capture, so flush replays it verbatim (no refetch, no
+     transform re-run; see data.writeIntake's 422 = already-landed rule). */
+  var INTAKE_PATH_RE = /^proposals\/from-field\/day-close\/[A-Za-z0-9._-]+\.md$/;
+
   function validEntry(e) {
+    if (e && e.kind === "dayclose") {
+      return !!(typeof e.id === "string" && e.id &&
+        typeof e.path === "string" && INTAKE_PATH_RE.test(e.path) &&
+        typeof e.content === "string" && e.content &&
+        typeof e.message === "string" && e.message &&
+        e.author && typeof e.author.name === "string" && e.author.name &&
+        typeof e.capturedAt === "string" && e.capturedAt);
+    }
     // jobPath may be EMPTY: an offline-boot capture runs against the
     // localStorage snapshot, which strips _meta — flush re-locates those
     // by job number. One of the two locators must be present.
@@ -140,6 +153,41 @@
       message: String(spec.message),
       author: { name: author.name, email: author.email || "field@fxcoating.ca" },
       capturedAt: capturedAt
+    };
+    if (!validEntry(entry)) return null;
+
+    var entries = load();
+    entries.push(entry);
+    if (!persist(entries)) return null;
+    notify();
+    return entry;
+  };
+
+  /* addIntake({path, content, message, jobNum, intakeKind}) -> entry | null
+     The day-close lane: stores the rendered intake file for verbatim replay.
+     intakeKind "day-close-money" rides along so writeIntake's full-scope
+     guard re-fires at FLUSH time (whoever holds the phone then), mirroring
+     flushOne's canEdit re-check on job writes. */
+  queue.addIntake = function (spec) {
+    spec = spec || {};
+    if (typeof spec.path !== "string" || !INTAKE_PATH_RE.test(spec.path)) return null;
+    if (typeof spec.content !== "string" || !spec.content) return null;
+    if (typeof spec.message !== "string" || !spec.message) return null;
+
+    var a = auth();
+    var author = (a && a.commitAuthor) ? a.commitAuthor()
+      : { name: (FXC.state && FXC.state.role && FXC.state.role.name) || "Field", email: "field@fxcoating.ca" };
+
+    var entry = {
+      id: "q" + Date.now() + "-" + (++seq),
+      kind: "dayclose",
+      path: spec.path,
+      content: spec.content,
+      message: String(spec.message),
+      author: { name: author.name, email: author.email || "field@fxcoating.ca" },
+      jobNum: String(spec.jobNum || ""),
+      intakeKind: spec.intakeKind === "day-close-money" ? "day-close-money" : "day-close",
+      capturedAt: today()
     };
     if (!validEntry(entry)) return null;
 
@@ -300,6 +348,25 @@
      refetch-re-run-retry mirroring edit.js writeOnce. */
   function flushOne(entry) {
     var d = dataMod();
+    /* day-close intake: verbatim PUT of the stored file — writeIntake maps a
+       422 to {alreadyExists} (the earlier flush landed), so replay after a
+       torn ack is idempotent, never a duplicate card. */
+    if (entry.kind === "dayclose") {
+      return d.writeIntake(entry.path, entry.content, entry.message, { author: entry.author, kind: entry.intakeKind })
+        .then(function () { return { ok: true }; })
+        ["catch"](function (e) {
+          if (e && e.scopeError) {
+            return { ok: false, blocked: true, error: "a queued closeout money strip is blocked — it syncs only with Brad or Dan signed in on this phone." };
+          }
+          if (e && (e.status === 401 || e.status === 403)) {
+            return { ok: false, authError: true, error: "GitHub refused the sync (" + e.status + ") — a token problem, not signal. Reconnect this device." };
+          }
+          if (e && e.status) {
+            return { ok: false, error: "sync failed (" + e.status + " on #" + (entry.jobNum || "?") + ") — your saves are still queued." };
+          }
+          return { ok: false, network: true, error: "still no signal — your saves are kept queued." };
+        });
+    }
     return readEntryJob(entry)
       .then(function (job) {
         var a = auth();
@@ -359,9 +426,10 @@
         if (r.ok) {
           queue.remove(entry.id);
           synced++;
-          // let the app repaint the job the commit just changed
+          // let the app repaint the job the commit just changed (day-close
+          // intake entries change no job file — nothing to repaint)
           try {
-            if (FXC.app && FXC.app.replaceJob && dataMod().parseJobMarkdown) {
+            if (r.newText && FXC.app && FXC.app.replaceJob && dataMod().parseJobMarkdown) {
               FXC.app.replaceJob(dataMod().parseJobMarkdown(r.newText, r.path, null));
             }
           } catch (e) {}

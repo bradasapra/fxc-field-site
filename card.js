@@ -245,7 +245,21 @@
     '.capverdict.bad{background:#fdecec;color:#a11;border:1px solid #f4b6b6;}',
     '.capsave{width:100%;min-height:52px;border:none;border-radius:13px;background:linear-gradient(100deg,var(--fx1),var(--fx2),var(--fx3));color:#fff;font-size:15px;font-weight:800;font-family:inherit;box-shadow:0 2px 8px rgba(171,84,145,.3);cursor:pointer;}',
     '.capfoot{text-align:center;font-size:11px;color:var(--good);font-weight:700;margin-top:9px;min-height:14px;}',
-    '.capnote{text-align:center;font-size:9.5px;color:var(--lab);font-weight:600;margin:7px 6px 2px;letter-spacing:.02em;}'
+    '.capnote{text-align:center;font-size:9.5px;color:var(--lab);font-weight:600;margin:7px 6px 2px;letter-spacing:.02em;}',
+    /* Day-Close sheet */
+    '.dcstamp{margin:-4px 0 12px;padding:8px 12px;border-radius:10px;background:#f6f6f7;border:1px solid var(--line);font-size:11.5px;font-weight:700;color:var(--sec);}',
+    '.dcmaster{max-height:132px;overflow-y:auto;align-content:flex-start;}',
+    '.dcline{display:flex;gap:8px;align-items:center;margin-top:8px;}',
+    '.dcline input{flex:1;min-width:0;padding:11px 12px;font-size:16px;border:1px solid var(--line);border-radius:11px;background:#fff;color:var(--ink);font-family:inherit;}',
+    '.dcunit{flex:0 0 auto;min-width:44px;text-align:center;font-size:12.5px;font-weight:800;color:var(--sec);}',
+    '.dcadd{margin-top:8px;}',
+    '.dchint{font-size:9.5px;color:var(--lab);font-weight:600;margin-top:6px;letter-spacing:.02em;}',
+    '.dcrow{display:flex;align-items:center;gap:8px;padding:8px 10px;margin-bottom:6px;border-radius:10px;background:#fafafa;border:1px solid var(--line);font-size:12.5px;font-weight:700;color:var(--ink);}',
+    '.dcrow .dcinfo{flex:1;min-width:0;}',
+    '.dcrow .dcx2{flex:0 0 auto;border:none;background:none;color:var(--sec);font-size:15px;cursor:pointer;padding:2px 6px;}',
+    '.dcrow .confirm{color:#9a6a00;}',
+    '#dc-money{margin:2px 0 14px;padding:12px;border-radius:13px;border:1px solid transparent;background:linear-gradient(#fff,#fff) padding-box,linear-gradient(120deg,var(--fx1),var(--fx2),var(--fx3)) border-box;}',
+    '.dcmoneyhead{font-size:9.5px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--fx2);}'
   ].join("");
 
   function esc(s) {
@@ -773,7 +787,21 @@
     // keeps its own live count as queued acks arrive (queue.js may not be
     // loaded in node tests / standalone exports — badge just stays hidden)
     var q = (root.FXC && root.FXC.queue && root.FXC.queue.count) ? root.FXC.queue.count(job && job.jobNumber) : 0;
-    return { seed: seed, areas: areas, products: products, spec: card.parseSpecLimits((job && job.conditions) || ""), queued: q };
+    /* Day-Close inputs: the sanitized master list rides INTO the iframe so the
+       picker works offline (no prices exist in it by contract); actor/scope are
+       DISPLAY hints only — the parent re-stamps job/who/role authoritatively at
+       write time (an iframe can't be trusted with its own identity). */
+    var FX = root.FXC || {};
+    var st = FX.state || {};
+    return {
+      seed: seed, areas: areas, products: products,
+      spec: card.parseSpecLimits((job && job.conditions) || ""), queued: q,
+      master: (FX.products && FX.products.ready && FX.products.ready()) ? FX.products.list() : [],
+      jobNumber: (job && job.jobNumber) || "",
+      actor: (st.role && st.role.name) || "",
+      canMoney: !!(st.role && st.role.scope === "full"),
+      dcDate: todayISO()
+    };
   };
 
   function stepMarkup(key, label, unit) {
@@ -801,7 +829,46 @@
       '<div class="capfield"><label>Qty used</label><input id="u-qty" autocomplete="off" placeholder="e.g. 9 kits (27 gal)"></div>' +
       '<div class="capfield"><label>Notes</label><input id="u-notes" autocomplete="off"></div></div>' +
       '<button type="button" class="capsave" id="capsave">Save reading</button>' +
-      '<div class="capfoot" id="capfoot"></div></div></div>';
+      '<div class="capfoot" id="capfoot"></div></div></div>' +
+      dayCloseOverlay();
+  }
+
+  /* the Day-Close sheet (replaces the paper Product-Usage sheet — contract:
+     fxc-pm/proposals/from-field/2026-07-17-day-close-intake-spec.md). One
+     card per job-day, write-once; the tap lane the crew ends the day on.
+     The money strip (#dc-money) renders for FULL scope only — a separate
+     FILE and role at write time, not a hidden field (crew never sees it). */
+  function dayCloseOverlay() {
+    return '<div class="capov" id="dcov" hidden><div class="capcard">' +
+      '<div class="caphead"><span class="capt">Day close — #<span id="dc-job"></span></span>' +
+      '<button type="button" class="capx" id="dcx">✕</button></div>' +
+      '<div class="dcstamp" id="dc-stamp"></div>' +
+      '<div class="capfield"><label>Where did the day end? · one tap</label><div class="capchips" id="dc-signal"></div></div>' +
+      '<div class="capfield"><label>Product that went down today</label>' +
+      '<div id="dc-rows"></div>' +
+      '<input id="dc-search" autocomplete="off" placeholder="find a code — 222, 288, flk…">' +
+      '<div class="capchips dcmaster" id="dc-master"></div>' +
+      '<div class="capqueued" id="dc-nomaster" hidden>Product list didn’t load — reload the app once online. The Other-item line below still works.</div>' +
+      '<div class="dcline"><input id="dc-qty" autocomplete="off" inputmode="decimal" placeholder="qty">' +
+      '<span class="dcunit" id="dc-unit">—</span>' +
+      '<input id="dc-batch" autocomplete="off" placeholder="batch # (optional)"></div>' +
+      '<button type="button" class="capchip dcadd" id="dc-add">+ Add product</button>' +
+      '<div class="dchint">blank qty is fine — it lands as CONFIRM for Brad, never a guessed 0</div></div>' +
+      '<div class="capfield"><label>Other item bought for this job</label>' +
+      '<div class="dcline"><input id="dc-item" autocomplete="off" placeholder="what was it"><input id="dc-amt" autocomplete="off" inputmode="decimal" placeholder="$"></div>' +
+      '<div class="dcline"><div class="capchips" id="dc-bucket"></div><div class="capchips" id="dc-curr"></div>' +
+      '<button type="button" class="capchip dcadd" id="dc-addoff">+ Add</button></div></div>' +
+      '<div id="dc-money" hidden>' +
+      '<div class="dcmoneyhead">Closeout money — Brad/Dan only</div>' +
+      '<div class="dcline"><input id="dcm-dep" autocomplete="off" inputmode="decimal" placeholder="deposit $">' +
+      '<input id="dcm-depdate" autocomplete="off" placeholder="received YYYY-MM-DD"></div>' +
+      '<div class="dcline"><input id="dcm-inv" autocomplete="off" inputmode="decimal" placeholder="final invoiced total $"></div>' +
+      '<button type="button" class="capchip dcadd" id="dcm-send">Send money strip</button>' +
+      '<div class="dchint">files as its OWN intake to Brad’s sweep — never on the crew card, never in the job prose</div></div>' +
+      '<button type="button" class="capsave" id="dcsend">Send day close</button>' +
+      '<div class="capfoot" id="dcfoot"></div>' +
+      '<div class="dchint">goes to Brad to file — nothing here edits the job record directly</div>' +
+      '</div></div>';
   }
 
   /* capture controller — serialized via .toString() into the card document, so it
@@ -880,10 +947,37 @@
       el.textContent = "⏳ " + qcount + " save" + (qcount === 1 ? "" : "s") + " waiting for signal — they'll sync on their own";
     }
     paintQueued();
+    /* ---- Day-Close state (sheet wiring at the bottom; declared here so
+       settle() can reach it — var/function hoisting keeps this legal in
+       the serialized iframe copy) ---- */
+    var dcov = null, dcRows = [], dcOff = [], dcSignal = "", dcPickCode = null;
+    var dcBucket = "Product", dcCurr = "CAD";
+    function hEsc(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;"); }
+    function dcFoot(msg, tone) { var f = $("dcfoot"); if (!f) return; f.textContent = msg; f.style.color = tone === "amber" ? "#9a6a00" : (tone ? "#e2606b" : ""); }
+    function dcSetSaving(on) {
+      var b = $("dcsend"); if (b) b.disabled = on;
+      var m = $("dcm-send"); if (m) m.disabled = on;
+      if (on) dcFoot("Sending…", false);
+    }
+    function dcSettle(p, ok, err, queued) {
+      dcSetSaving(false);
+      if (!ok) { dcFoot("✗ Not sent — " + (err || "couldn't reach the vault. Fix the connection and tap Send again."), true); return; }
+      if (queued) { qcount++; paintQueued(); }
+      if (p.kind === "dayclose") {
+        dcRows = []; dcOff = []; dcSignal = ""; dcPaint();
+        dcFoot(queued ? "Queued ✓ — the day close syncs itself when signal returns" : "Sent ✓ — Brad files it into the record", queued ? "amber" : false);
+      } else {
+        var m1 = $("dcm-dep"), m2 = $("dcm-depdate"), m3 = $("dcm-inv");
+        if (m1) m1.value = ""; if (m2) m2.value = ""; if (m3) m3.value = "";
+        dcFoot(queued ? "Queued ✓ — the money strip syncs when signal returns" : "Sent ✓ — money strip filed to Brad's intake", queued ? "amber" : false);
+      }
+    }
+
     function settle(ok, err, queued) {
       if (!pending) return;
       var p = pending; pending = null;
       if (ackTimer) { clearTimeout(ackTimer); ackTimer = null; }
+      if (p.kind === "dayclose" || p.kind === "dayclose-money") { dcSettle(p, ok, err, queued); return; }
       setSaving(false);
       if (!ok) { foot("✗ Not saved — " + (err || "couldn't reach the vault. Fix the connection and tap Save again."), true); return; }
       /* queued offline: the row is safe — clear the form exactly as on a
@@ -947,6 +1041,153 @@
         var nv = Math.round((cur + dir * step) * 100) / 100; if (nv < 0) nv = 0;
         setStep(key, nv); verdict();
       };
+    }
+
+    /* ===== Day-Close sheet (the end-of-day lane) =====
+       Rows accumulate locally; ONE Send posts the whole card to the parent,
+       which stamps job/who/role authoritatively and writes the write-once
+       intake file (or queues it on dead signal). Codes come ONLY from the
+       master list — there is no free-text code path, by contract. */
+    var SIGNALS = [
+      { k: "prepping", t: "prepping" }, { k: "applying", t: "applying" },
+      { k: "destaging", t: "destaging" }, { k: "walkthrough-done", t: "walkthrough done" },
+      { k: "final-day", t: "FINAL DAY" }
+    ];
+    var BUCKETS = ["Product", "Sundries"], CURRENCIES = ["CAD", "USD"];
+    function chipStrip(el, list, sel, keyed) {
+      if (!el) return;
+      var htm = "";
+      list.forEach(function (it) {
+        var k = keyed ? it.k : it, t = keyed ? it.t : it;
+        htm += '<button type="button" class="capchip' + (k === sel ? " on" : "") + '" data-k="' + hEsc(k) + '">' + hEsc(t) + "</button>";
+      });
+      el.innerHTML = htm;
+    }
+    function dcMasterOf(code) {
+      var hit = null;
+      (CAP.master || []).some(function (m) { if (m.code === code) { hit = m; return true; } return false; });
+      return hit;
+    }
+    function dcMasterChips() {
+      var q = ($("dc-search").value || "").toLowerCase();
+      var htm = "";
+      (CAP.master || []).forEach(function (p) {
+        if (q && p.code.toLowerCase().indexOf(q) < 0 && String(p.name || "").toLowerCase().indexOf(q) < 0) return;
+        var label = p.code + (p.name && p.name !== "CONFIRM" ? " · " + String(p.name).replace(/^Series\s+\S+\s*/, "") : "");
+        htm += '<button type="button" class="capchip' + (p.code === dcPickCode ? " on" : "") + '" data-k="' + hEsc(p.code) + '">' + hEsc(label) + "</button>";
+      });
+      $("dc-master").innerHTML = htm;
+      $("dc-nomaster").hidden = (CAP.master || []).length > 0;
+    }
+    function dcUnitPaint() {
+      var p = dcMasterOf(dcPickCode);
+      $("dc-unit").textContent = p ? p.unit : "—";
+      return p;
+    }
+    function dcPaint() {
+      if (!dcov) return;
+      var htm = "";
+      dcRows.forEach(function (r, idx) {
+        htm += '<div class="dcrow"><div class="dcinfo">' + hEsc(r.code) + " · " +
+          (r.qty ? hEsc(r.qty) + " " + hEsc(r.unit) : '<span class="confirm">CONFIRM</span> ' + hEsc(r.unit)) +
+          (r.batch ? " · batch " + hEsc(r.batch) : "") +
+          '</div><button type="button" class="dcx2" data-i="' + idx + '" data-list="rows">✕</button></div>';
+      });
+      dcOff.forEach(function (r, idx) {
+        htm += '<div class="dcrow"><div class="dcinfo">' + hEsc(r.item) + " · " +
+          (r.amount ? "$" + hEsc(r.amount) : '<span class="confirm">CONFIRM</span>') + " · " + hEsc(r.bucket) + " " + hEsc(r.currency) +
+          '</div><button type="button" class="dcx2" data-i="' + idx + '" data-list="off">✕</button></div>';
+      });
+      $("dc-rows").innerHTML = htm;
+      chipStrip($("dc-signal"), SIGNALS, dcSignal, true);
+      chipStrip($("dc-bucket"), BUCKETS, dcBucket);
+      chipStrip($("dc-curr"), CURRENCIES, dcCurr);
+      dcMasterChips();
+      dcUnitPaint();
+    }
+    function openDc() {
+      $("dc-job").textContent = CAP.jobNumber || "";
+      $("dc-stamp").textContent = "#" + (CAP.jobNumber || "?") + " · " + (CAP.dcDate || "today") +
+        (CAP.actor ? " · " + CAP.actor : "") + " — stamped by the app, never typed";
+      dcFoot("", false);
+      dcPaint();
+      dcov.hidden = false;
+    }
+    function closeDc() { dcov.hidden = true; try { window.parent.postMessage({ fxc: "capture-close" }, "*"); } catch (e) {} }
+
+    dcov = $("dcov");
+    if (dcov) {
+      var dcb = $("cap-dayclose"); if (dcb) dcb.onclick = openDc;
+      $("dcx").onclick = closeDc;
+      dcov.onclick = function (e) { if (e.target === dcov) closeDc(); };
+      $("dc-search").oninput = function () { dcMasterChips(); };
+      $("dc-master").onclick = function (e) {
+        var b = e.target.closest(".capchip"); if (!b) return;
+        dcPickCode = b.getAttribute("data-k");
+        dcMasterChips(); dcUnitPaint();
+      };
+      $("dc-signal").onclick = function (e) {
+        var b = e.target.closest(".capchip"); if (!b) return;
+        dcSignal = b.getAttribute("data-k");
+        chipStrip($("dc-signal"), SIGNALS, dcSignal, true);
+      };
+      $("dc-bucket").onclick = function (e) {
+        var b = e.target.closest(".capchip"); if (!b) return;
+        dcBucket = b.getAttribute("data-k");
+        chipStrip($("dc-bucket"), BUCKETS, dcBucket);
+      };
+      $("dc-curr").onclick = function (e) {
+        var b = e.target.closest(".capchip"); if (!b) return;
+        dcCurr = b.getAttribute("data-k");
+        chipStrip($("dc-curr"), CURRENCIES, dcCurr);
+      };
+      $("dc-add").onclick = function () {
+        var p = dcUnitPaint();
+        if (!p) { dcFoot("Pick a code off the list first — free-typed codes don't exist here (the 222-trap)", true); return; }
+        dcRows.push({ code: p.code, qty: $("dc-qty").value.trim(), unit: p.unit, batch: $("dc-batch").value.trim() });
+        $("dc-qty").value = ""; $("dc-batch").value = ""; $("dc-search").value = ""; dcPickCode = null;
+        dcFoot("", false); dcPaint();
+      };
+      $("dc-addoff").onclick = function () {
+        var item = $("dc-item").value.trim();
+        if (!item) { dcFoot("Name the item first", true); return; }
+        dcOff.push({ item: item, amount: $("dc-amt").value.trim(), bucket: dcBucket, currency: dcCurr });
+        $("dc-item").value = ""; $("dc-amt").value = "";
+        dcFoot("", false); dcPaint();
+      };
+      $("dc-rows").onclick = function (e) {
+        var b = e.target.closest(".dcx2"); if (!b) return;
+        var idx = +b.getAttribute("data-i");
+        if (b.getAttribute("data-list") === "rows") dcRows.splice(idx, 1); else dcOff.splice(idx, 1);
+        dcPaint();
+      };
+      $("dcsend").onclick = function () {
+        if (pending) return; /* one in-flight send at a time */
+        if (window.parent === window) { dcFoot("✗ This saved-file copy can't write — open the card through the app link.", true); return; }
+        if (!dcSignal) { dcFoot("One tap first — where did the day end?", true); return; }
+        pending = { id: ++seq, kind: "dayclose", payload: { signal: dcSignal, rows: dcRows.slice(), off: dcOff.slice() } };
+        dcSetSaving(true);
+        ackTimer = setTimeout(function () { settle(false, "no answer from the app. Reload and check with Brad before re-sending."); }, 15000);
+        post("dayclose", pending.payload, pending.id);
+      };
+
+      /* money strip: FULL scope only. CAP.canMoney is a render hint — the
+         parent + writeIntake re-check the live role at write time, and the
+         strip files as its OWN intake type (file-level split, never fields
+         on the crew card). Crew devices simply never see this block. */
+      if (CAP.canMoney && $("dc-money")) {
+        $("dc-money").hidden = false;
+        $("dcm-send").onclick = function () {
+          if (pending) return;
+          if (window.parent === window) { dcFoot("✗ This saved-file copy can't write — open the card through the app link.", true); return; }
+          var dep = $("dcm-dep").value.trim(), depd = $("dcm-depdate").value.trim(), inv = $("dcm-inv").value.trim();
+          if (!dep && !depd && !inv) { dcFoot("Enter at least one money fact — deposit, its date, or the invoiced total", true); return; }
+          pending = { id: ++seq, kind: "dayclose-money", payload: { deposit_amount: dep, deposit_received: depd, invoice_amount: inv } };
+          dcSetSaving(true);
+          ackTimer = setTimeout(function () { settle(false, "no answer from the app. Reload and retry."); }, 15000);
+          post("dayclose-money", pending.payload, pending.id);
+        };
+      }
     }
   }
   card.captureScript = function (job) {
@@ -1111,6 +1352,8 @@
       cap = strip +
         '<div class="capbar"><div class="capbtn primary" id="cap-reading">+ Reading</div>' +
         '<div class="capbtn" id="cap-batch">+ Batch</div><div class="capbtn">+ Photo</div></div>' +
+        // end-of-day lane: its own full-width row — one tap closes the day
+        '<div class="capbar"><div class="capbtn" id="cap-dayclose">☑ Day close — what went down today</div></div>' +
         '<div class="capqueued" id="capqueued" hidden></div>' + // pending offline saves (controller paints)
         '<div class="capnote">each Save writes one role-stamped row to the vault · + Photo coming</div>';
     } else {

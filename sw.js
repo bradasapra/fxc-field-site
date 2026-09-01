@@ -31,6 +31,8 @@ const SHELL_ASSETS = [
   './index.html',
   './config.js',
   './data.js',
+  './products.js',
+  './products.json',
   './card.js',
   './demo-jobs.js',
   './identity.js',

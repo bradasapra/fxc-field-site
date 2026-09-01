@@ -1219,6 +1219,11 @@ window.addEventListener("message", function(e){
   // the iframe is waiting on an ack — never leave it hanging on a guard exit
   if(!window.FXC || !FXC.edit){ ack(false, "the app isn't ready — reload and retry."); return; }
   if(!_fcJob){ ack(false, "no job is open — reload the card."); return; }
+  // Day-Close lane: a NEW write-once FILE on the proposals rail, never a job
+  // transform — bypasses edit.commit; data.writeIntake owns the allowlist +
+  // write-once + money-scope guards. Contract:
+  // fxc-pm/proposals/from-field/2026-07-17-day-close-intake-spec.md
+  if(d.kind === "dayclose" || d.kind === "dayclose-money"){ handleDayClose(d, ack); return; }
   const row = d.row || {};
   const usage = (d.kind === "usage" || d.kind === "batch");
   const fn = function(job){
@@ -1246,6 +1251,70 @@ window.addEventListener("message", function(e){
     });
   });
 });
+
+/* Day-Close capture: parent stamps job/date/who/role AUTHORITATIVELY (the
+   iframe's copy is display-only — an iframe can't be trusted with its own
+   identity), builds the intake file with the engine, writes it write-once,
+   and queues it verbatim on definitive network failure (same "fetch rejection
+   carries no .status" rule as edit.commit's queueCapture). */
+function handleDayClose(d, ack){
+  const money = d.kind === "dayclose-money";
+  if(FXC.state.mode === "demo"){
+    if(FXC.app && FXC.app.toast) FXC.app.toast("Preview — day close simulated, nothing written. Connect the repo for real sends.", "info");
+    ack(true); return;
+  }
+  const role = (window.FXCAuth || FXC.identity).getRole();
+  if(!role){ ack(false, "pick who you are first — tap the chip top-right."); return; }
+  if(money && role.scope !== "full"){ ack(false, "closeout money is Brad/Dan only."); return; }
+  if(!money && role.scope !== "full" && _fcJob.bucket !== "active"){ ack(false, "day close is for active jobs."); return; }
+  const payload = d.row || {};
+  const created = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+  let built;
+  try{
+    if(money){
+      built = FXC.data.buildDayCloseMoneyFile({
+        job: String(_fcJob.jobNumber), who: role.name, role: role.name.toLowerCase(), created: created,
+        deposit_amount: payload.deposit_amount, deposit_received: payload.deposit_received,
+        invoice_amount: payload.invoice_amount
+      });
+    } else {
+      // re-resolve codes against the master where it's loaded — the picker is
+      // the only source of codes, but the PARENT is the authority (a stale
+      // iframe list must not smuggle a dead code or wrong unit into the vault)
+      let rows = Array.isArray(payload.rows) ? payload.rows : [];
+      if(FXC.products && FXC.products.ready && FXC.products.ready()){
+        rows = rows.map(r => {
+          const m = FXC.products.byCode(r && r.code);
+          return m ? { code: m.code, qty: r && r.qty, unit: m.unit, batch: r && r.batch } : null;
+        }).filter(Boolean);
+      }
+      built = FXC.data.buildDayCloseFile({
+        job: String(_fcJob.jobNumber),
+        date: FXC.data._today ? FXC.data._today() : new Date().toISOString().slice(0, 10),
+        who: role.scope === "full" ? role.name : "crew:" + role.name,
+        role: role.scope === "full" ? role.name.toLowerCase() : "crew",
+        signal: payload.signal, created: created,
+        productsVersion: (FXC.products && FXC.products.version) ? FXC.products.version() : null,
+        rows: rows, off: Array.isArray(payload.off) ? payload.off : []
+      });
+    }
+  }catch(err){ ack(false, (err && err.message) || "couldn't build the day-close file."); return; }
+  const queueIt = () => {
+    const entry = FXC.queue && FXC.queue.addIntake && FXC.queue.addIntake({
+      path: built.path, content: built.content, message: built.message,
+      jobNum: String(_fcJob.jobNumber || ""), intakeKind: money ? "day-close-money" : "day-close"
+    });
+    if(entry){ ack(true, undefined, true); return true; }
+    return false;
+  };
+  if(FXC.state.mode === "offline"){ if(!queueIt()) ack(false, "couldn't queue — storage unavailable."); return; }
+  FXC.data.writeIntake(built.path, built.content, built.message, { kind: money ? "day-close-money" : "day-close" })
+    .then(() => ack(true))
+    .catch(err => {
+      if(!(err && err.status) && queueIt()) return; // definitive network failure only
+      ack(false, (err && err.message) || "write failed.");
+    });
+}
 
 /* Export the field card as a single self-contained HTML file (photos inlined as
    base64 so it works anywhere — Sync share, email, double-click). The no-app share
@@ -1299,6 +1368,7 @@ document.addEventListener("keydown",e=>{ if(e.key==="Escape"){ closeFieldCard();
 </script>
 <script src="./config.js"></script>
 <script src="./data.js"></script>
+<script src="./products.js"></script>
 <script src="./card.js"></script>
 <script src="./demo-jobs.js"></script>
 <script src="./identity.js"></script>
