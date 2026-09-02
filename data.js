@@ -680,7 +680,14 @@
 
     var jobNumber = fmStr(get("job_number"));
     var address = fmStr(get("address"));
-    var sqftNum = toNum(get("sqft"));
+    var sqftRaw = fmStr(get("sqft"));
+    var sqftNum = toNum(sqftRaw);
+    /* a unit-bearing measure ("390 lnft" — seam jobs are priced per linear
+       foot; 2809) is NOT an area: keep sqft=0 so no area math runs on it, and
+       carry the string as written for display (job.measure). Flagged to FXC-4:
+       SCHEMA's sqft is numeric — a sanctioned unit suffix or measure field is
+       the vault-side fix; this is display tolerance, not a schema fork. */
+    var measure = (sqftNum == null && sqftRaw) ? sqftRaw : "";
 
     var idxSections = parsedExtra.sectionLineIndex || {};
     var scopeText = parsedExtra.scopeText || "";
@@ -709,6 +716,7 @@
       system: stripWiki(get("coating_system")),
       systemDesc: "",
       sqft: sqftNum == null ? 0 : sqftNum,
+      measure: measure,
       prep: fmStr(get("prep")),
       dates: {
         won: fmStr(get("date_won")) || null,

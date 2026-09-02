@@ -313,7 +313,7 @@
     }
     return '<div class="idstrip span2">' +
       '<div><div class="jobno"><span class="fxtext">#' + esc(job.jobNumber) + '</span></div>' +
-      '<div class="jobsub">' + sub + "<br>" + (job.sqft ? Number(job.sqft).toLocaleString() + " sqft" : "") +
+      '<div class="jobsub">' + sub + "<br>" + esc(measureOf(job)) +
       " · won " + shortDate(job.dates && job.dates.won) + "</div></div>" +
       '<div class="idright">' + dayBar + dlab + "</div></div>";
   }
@@ -600,6 +600,12 @@
     return "confirm site power at scheduling";
   }
 
+  /* the job's size as the record states it: area in sqft, or a unit-bearing
+     measure written verbatim ("390 lnft" — seam jobs); "" when neither exists */
+  function measureOf(job) {
+    return job.measure || (job.sqft ? Number(job.sqft).toLocaleString() + " sqft" : "");
+  }
+
   /* vault prose carries inline markdown (**bold**, [[wiki links]]) — render
      the safe subset instead of literal asterisks; escapes FIRST. */
   function mdi(s) {
@@ -661,7 +667,7 @@
         '<div><div class="pname">' + esc(l.product || l.layer) + '</div><div class="prole">' + esc(l.layer || "") + "</div></div></div>";
     }).join("");
     return '<div class="tile span2 spec"><div class="tlabel"><span class="dot"></span>System spec · ' + esc(job.system || "") + '</div>' +
-      rows + '<div class="spectotal">' + (job.sqft ? Number(job.sqft).toLocaleString() + " SQFT" : "") +
+      rows + '<div class="spectotal">' + esc(measureOf(job).toUpperCase()) +
       (job.systemDesc ? " · " + esc(job.systemDesc.toUpperCase()) : "") + "</div></div>";
   }
   function tGateHistory(job) {
@@ -1334,7 +1340,7 @@
     if (job.dates && job.dates.won) {
       miles.push(wireItem("sys", "FXC", shortDate(job.dates.won) + " · deal won",
         "<b>" + esc(job.customer || job.title || ("#" + job.jobNumber)) + "</b>" +
-        (job.sqft ? " — " + Number(job.sqft).toLocaleString() + " sqft" : "")));
+        (measureOf(job) ? " — " + measureOf(job) : "")));
     }
 
     var out = [];

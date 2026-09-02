@@ -449,6 +449,9 @@ const esc = s => (s==null?"":String(s)).replace(/[&<>"']/g,c=>({"&":"&amp;","<":
 /* vault prose carries inline markdown (**bold**, [[wiki links]]) — render the
    safe subset instead of showing literal asterisks. Escapes FIRST, so nothing
    from the record ever lands as raw HTML. */
+/* the job's size as the record states it: area in sqft, or a unit-bearing
+   measure written verbatim ("390 lnft" — seam jobs); "" when neither exists */
+const measureOf = j => j.measure || (j.sqft ? j.sqft.toLocaleString() + " sqft" : "");
 const mdi = s => esc(s)
   .replace(/\[\[([^\]|]*)(?:\|([^\]]*))?\]\]/g,(m,p,a)=>(a||p).trim())
   .replace(/\*\*([^*]+?)\*\*/g,"<b>$1</b>");
@@ -577,7 +580,7 @@ function cardHTML(j){
   const pr = cardProgress(j);
   const cover = j.cover ? `<div class="cover" style="background-image:url('${esc(j.cover)}')"></div>` : "";
   const sys = j.system ? `<span class="chip sys">${esc(j.system)}</span>` : "";
-  const sqft = j.sqft ? `<span class="chip">${j.sqft.toLocaleString()} sqft</span>` : "";
+  const sqft = measureOf(j) ? `<span class="chip">${esc(measureOf(j))}</span>` : "";
   const att = j.photos ? `<span class="chip att">📷 ${j.photos}</span>` : "";
   const ck = pr ? `<span class="chip ck${pr.pct===100?" ok":""}">☑ ${pr.done}/${pr.total}</span>` : "";
   const stage = (j.bucket==="closeout") ? `<div class="stagechip">${esc(normalizeStage(j.stage))}</div>` : "";
@@ -741,7 +744,7 @@ function viewTable(){
       <td><b>${esc(j.customer||j.title)}</b>${j.customer?`<br><span style="color:var(--ink-faint);font-size:12px">${esc(j.title)}</span>`:""}</td>
       <td><span class="pill" style="${statusStyle(j)}">${j.bucket==="closeout"?esc(normalizeStage(j.stage)):esc(BUCKET_META[j.bucket].title)}</span>${isMoved(j)?` <span class="moved-badge">moved</span>`:""}</td>
       <td>${esc(j.system||"—")}</td>
-      <td class="num">${j.sqft?j.sqft.toLocaleString():"—"}</td>
+      <td class="num">${measureOf(j)?esc(measureOf(j)):"—"}</td>
       <td class="num">${j.money?money(j.money.quote):"—"}</td>
       <td>${j.photos?("📷 "+j.photos):"—"}</td>
       <td class="num">${pr?(pr.done+"/"+pr.total):"—"}</td>
@@ -1076,7 +1079,7 @@ function richDetail(j){
       ${j.contact.email?`<a href="mailto:${esc(j.contact.email)}">✉️ Email</a>`:""}
     </div>
     <div class="glance">
-      <div class="g-line"><b>${j.sqft.toLocaleString()} sqft</b> · ${esc(j.segment)} <span class="g-sys">${esc(j.system)}${j.systemDesc?(" · "+esc(j.systemDesc)):""}</span></div>
+      <div class="g-line"><b>${esc(measureOf(j) || "no area on record")}</b> · ${esc(j.segment)} <span class="g-sys">${esc(j.system)}${j.systemDesc?(" · "+esc(j.systemDesc)):""}</span></div>
       <div class="g-grid">
         <span>📍 <a href="${esc(j.maps)}" target="_blank" rel="noopener">${esc(j.address)}</a></span>
         <span>👤 ${esc(j.contact.name)} · ${esc(j.contact.phone || j.contact.email || "")}</span>
