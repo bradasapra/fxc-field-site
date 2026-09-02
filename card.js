@@ -600,16 +600,24 @@
     return "confirm site power at scheduling";
   }
 
+  /* vault prose carries inline markdown (**bold**, [[wiki links]]) — render
+     the safe subset instead of literal asterisks; escapes FIRST. */
+  function mdi(s) {
+    return esc(s)
+      .replace(/\[\[([^\]|]*)(?:\|([^\]]*))?\]\]/g, function (m, p, a) { return (a || p).trim(); })
+      .replace(/\*\*([^*]+?)\*\*/g, "<b>$1</b>");
+  }
+
   function tPrep(job) {
     var out = "";
     if (job.conditions) {
       out += '<div class="span2 secblock"><div class="sechead cond-h">⚠ Conditions &amp; spec limits</div>' +
         specLimits(job) +
-        '<div class="cbox">' + esc(job.conditions) + "</div></div>";
+        '<div class="cbox">' + mdi(job.conditions) + "</div></div>";
     }
     var items = (job.watchouts && job.watchouts.length) ? job.watchouts : (job.prep ? [job.prep] : []);
     if (items.length) {
-      var lis = items.slice(0, 8).map(function (w) { return "<li>" + esc(w) + "</li>"; }).join("");
+      var lis = items.slice(0, 8).map(function (w) { return "<li>" + mdi(w) + "</li>"; }).join("");
       out += '<div class="span2 secblock"><div class="sechead watch-h">🚩 Critical watch-outs</div>' +
         '<ul class="wbox">' + lis + "</ul></div>";
     }

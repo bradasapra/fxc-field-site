@@ -446,6 +446,12 @@ function fmtDate(s){
   const[y,m,d]=s.slice(0,10).split("-").map(Number); return `${MONTHS[m-1]} ${d}, ${y}`;
 }
 const esc = s => (s==null?"":String(s)).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+/* vault prose carries inline markdown (**bold**, [[wiki links]]) — render the
+   safe subset instead of showing literal asterisks. Escapes FIRST, so nothing
+   from the record ever lands as raw HTML. */
+const mdi = s => esc(s)
+  .replace(/\[\[([^\]|]*)(?:\|([^\]]*))?\]\]/g,(m,p,a)=>(a||p).trim())
+  .replace(/\*\*([^*]+?)\*\*/g,"<b>$1</b>");
 
 function checklistProgress(j){
   if(!j.checklists) return null;
@@ -1079,17 +1085,17 @@ function richDetail(j){
       <div class="note g-note">Sequence-driven: coat between framing/spray-foam and finish — confirm dates with ${esc(j.contact.name.split(" ")[0])}.</div>
     </div>
     <h4>Scope</h4>
-    <div class="scope">${esc(j.scope)}</div>
+    <div class="scope">${mdi(j.scope)}</div>
     <h4>Prep</h4>
-    <div class="scope">${esc(j.prep)}</div>
+    <div class="scope">${mdi(j.prep)}</div>
     <h4>The build · products by layer</h4>
     <ul class="layers">${j.buildup.map(l=>`<li><b>${esc(l.layer)}</b> — ${esc(l.product)}<span class="dft">${esc(l.dft)}</span></li>`).join("")}</ul>
     ${materialsHTML(j)}
     ${captureTablesHTML(j)}
     <h4>⚠ Conditions &amp; spec limits</h4>
-    <div class="cond">${esc(j.conditions)}</div>
+    <div class="cond">${mdi(j.conditions)}</div>
     <h4>🚩 Critical watch-outs</h4>
-    <ul class="watch">${j.watchouts.map(w=>`<li>${esc(w)}</li>`).join("")}</ul>
+    <ul class="watch">${j.watchouts.map(w=>`<li>${mdi(w)}</li>`).join("")}</ul>
     <h4>📷 Site photos</h4>
     <div class="photos">${
       (j.photoUrls && j.photoUrls.length)
