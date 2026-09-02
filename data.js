@@ -127,8 +127,9 @@
   }
 
   function toNum(s) {
-    if (s == null || s === "") return null;
-    var n = Number(String(s).replace(/[$,]/g, "").trim());
+    var v = fmStr(s); // frontmatter scalars carry inline "# …" comments (2809 quote_value) — strip before Number
+    if (v === "") return null;
+    var n = Number(v.replace(/[$,]/g, ""));
     return isFinite(n) ? n : null;
   }
 
