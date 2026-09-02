@@ -363,6 +363,7 @@
       if (snap && snap.length) {
         root.JOBS = snap; FXC.state.mode = "offline"; reRender();
         banner("Offline — showing last synced data. Readings, batches and notes still save; they'll sync when signal returns.", "warn");
+        offlineActions();
         surfaceRecovery();
         openDeepLink();
       } else {
@@ -431,13 +432,33 @@
     host.appendChild(keepB);
   }
 
+  /* the offline banner carries its own way back (Brad 2026-09-02, hit mid-
+     cutover): Retry re-attempts with the stored token (dead-signal case);
+     Reconnect opens device setup (dead/rotated-token case — before this,
+     a connected-but-offline device had NO path to "Forget this device"). */
+  function offlineActions() {
+    var host = document.getElementById("fxc-banner");
+    if (!host) return;
+    function mk(label, fn) {
+      var b = document.createElement("button");
+      b.textContent = label;
+      b.setAttribute("style", "margin-left:12px;padding:3px 12px;border-radius:8px;border:1px solid var(--amber);" +
+        "background:transparent;color:var(--amber);font:inherit;font-size:12px;cursor:pointer");
+      b.onclick = fn;
+      host.appendChild(b);
+    }
+    mk("Retry", function () { loadLive(); });
+    mk("Reconnect", openSetup);
+  }
+
   function afterConnect() {
     if (auth().getRole()) loadLive();
-    else auth().showRolePicker({ crewList: FXC.crew, onPick: function () { loadLive(); } });
+    else auth().showRolePicker({ crewList: FXC.crew, onDeviceSetup: openSetup, onPick: function () { loadLive(); } });
   }
 
   function chipTap() {
-    if (FXC.state.mode === "demo") openSetup();
+    // offline: the action you want from the chip is reconnecting, not role-switching
+    if (FXC.state.mode === "demo" || FXC.state.mode === "offline") openSetup();
     else openRolePicker();
   }
   function openSetup() {
@@ -447,7 +468,7 @@
     });
   }
   function openRolePicker() {
-    auth().showRolePicker({ crewList: FXC.crew, onPick: function () {
+    auth().showRolePicker({ crewList: FXC.crew, onDeviceSetup: openSetup, onPick: function () {
       auth().renderChip(chipTap);
       if (FXC.state.mode === "live") reRender();
     } });
@@ -470,7 +491,7 @@
     if (auth().hasToken()) {
       FXC.data.configure(assign({}, auth().getConfig(), { token: auth().getToken() }));
       if (auth().getRole()) { enterDemoBackdrop(); loadLive(); }
-      else { enterDemoBackdrop(); auth().showRolePicker({ crewList: FXC.crew, onPick: function () { loadLive(); } }); }
+      else { enterDemoBackdrop(); auth().showRolePicker({ crewList: FXC.crew, onDeviceSetup: openSetup, onPick: function () { loadLive(); } }); }
     } else {
       enterDemoBackdrop();
       auth().showDeviceSetup({ onDone: afterConnect, onPreview: function () { FXC.state.mode = "demo"; auth().renderChip(chipTap); } });

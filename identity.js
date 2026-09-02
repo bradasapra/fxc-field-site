@@ -496,7 +496,13 @@
         '<input id="fxc-role-free" type="text" autocapitalize="words" autocorrect="off" spellcheck="false" ' +
           'style="' + INPUT_STYLE + ';margin-top:5px;flex:1" placeholder="Your name">' +
         '<button id="fxc-role-freego" style="margin-top:5px;padding:0 16px;border:none;border-radius:10px;background:var(--panel2);border:1px solid var(--line);color:var(--ink);font-weight:700;font-size:15px;cursor:pointer">Go</button>' +
-      '</div>';
+      '</div>' +
+      /* device setup is reachable from the picker too — before this, a
+         connected device's chip only ever led here, stranding Forget/token
+         swaps behind demo mode (Brad, mid-cutover 2026-09-02) */
+      (typeof opts.onDeviceSetup === "function"
+        ? '<div style="margin-top:14px;text-align:right"><button id="fxc-role-setup" style="' + LINK_STYLE + '">Device settings…</button></div>'
+        : "");
 
     ov.appendChild(card);
     document.body.appendChild(ov);
@@ -520,6 +526,12 @@
     }
     card.querySelector("#fxc-role-freego").onclick = freeGo;
     freeInput.addEventListener("keydown", function (e) { if (e.key === "Enter") freeGo(); });
+
+    var setupLink = card.querySelector("#fxc-role-setup");
+    if (setupLink) setupLink.onclick = function () {
+      removeOverlay("fxc-role-overlay");
+      opts.onDeviceSetup();
+    };
 
     return ov;
   }
