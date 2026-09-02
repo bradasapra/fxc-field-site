@@ -632,32 +632,40 @@
     return buf.join(" ").trim();
   }
 
-  /* watchouts <- "## Notes" "PM watch-outs:" sub-points (split on "; ") */
+  /* watchouts <- "## Notes" "PM watch-outs:" bullet(s). Tolerant of the shapes the
+     vault actually writes (2026-09-02 trace of all 14 live records): a plain or
+     **bold** label, a parenthetical after the label ("PM watch-outs (from FXC-3
+     handoff):"), items separated by "; " OR " · ", continuation lines, and MORE
+     THAN ONE such bullet — a later dated note ("- 2026-09-02 (Brad): PM watch-outs:
+     …", i.e. the dashboard's + Add a note) adds to the list instead of being
+     ignored. Display only; never written back. */
+  var WATCHOUT_LABEL = /\*{0,2}PM watch-?\s?outs\*{0,2}\s*(?:\([^)]*\))?\s*:\*{0,2}\s*(.*)$/i;
   function parseWatchouts(rawLines, idx) {
     var out = [];
     try {
       var notes = getSectionText(rawLines, idx.notes);
       if (!notes) return out;
       var lines = notes.split("\n");
-      var buf = [];
-      var collecting = false;
+      var blocks = [];      // one text blob per watch-outs bullet, in record order
+      var cur = null;
       for (var i = 0; i < lines.length; i++) {
         var t = lines[i].trim();
-        var m = t.match(/PM watch-?outs\s*:\s*(.*)$/i);
-        if (m) { collecting = true; if (m[1]) buf.push(m[1]); continue; }
-        if (collecting) {
-          if (/^-\s/.test(t)) break;          // next bullet ends this one
+        var m = t.match(WATCHOUT_LABEL);
+        if (m) { cur = [m[1]]; blocks.push(cur); continue; }
+        if (cur) {
+          if (/^-\s/.test(t)) { cur = null; continue; }   // next bullet ends this block; keep scanning
           if (t === "") continue;
-          buf.push(t);
+          cur.push(t);
         }
       }
-      var blob = buf.join(" ").trim();
-      if (blob) {
-        blob.split(/;\s+/).forEach(function (s) {
+      blocks.forEach(function (b) {
+        var blob = b.join(" ").trim();
+        if (!blob) return;
+        blob.split(/;\s+|\s+·\s+/).forEach(function (s) {
           s = s.replace(/\.$/, "").trim();
           if (s) out.push(s.charAt(0).toUpperCase() + s.slice(1));
         });
-      }
+      });
     } catch (e) { /* fall through to [] */ }
     return out;
   }
