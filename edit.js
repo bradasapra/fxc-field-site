@@ -70,6 +70,9 @@
       ".fxc-gatehead.more:hover{border-color:var(--accent)}" +
       ".fxc-gatehead.more .gname::before{content:'\\25B8';display:inline-block;flex:none;color:var(--accent);font-weight:800;margin-right:8px;transition:transform .12s}" +
       ".fxc-gatehead.more.exp .gname::before{transform:rotate(90deg)}" +
+      ".fxc-gatehead .pct.passed{color:var(--amber)}" +
+      ".fxc-gatehead .pct.cleared{color:var(--green)}" +
+      ".fxc-gatehead .pct.now{color:var(--accent);font-weight:800}" +
       ".fxc-reveal{display:none}" +
       ".fxc-reveal.open{display:block}" +
       ".fxc-btn{width:100%;padding:13px 14px;border:none;border-radius:10px;background:var(--accent);color:#10140f;font-weight:800;font-size:15px;cursor:pointer;margin-top:6px}" +
@@ -174,6 +177,19 @@
     var from = job.status;
     for (var to in T) { if (T[to] && T[to].from === from) return to; }
     return null;
+  }
+  /* position of a status on the won→closed chain (-1 = off-chain, e.g. cancelled) —
+     lets the checklist tell a gate the job has already PASSED from one still ahead */
+  function chainIndex(status) {
+    var T = data().TRANSITIONS || {};
+    var order = ["won"], cur = "won";
+    for (var i = 0; i < 20 && cur !== "closed"; i++) {
+      var nxt = null;
+      for (var to in T) { if (T[to] && T[to].from === cur) { nxt = to; break; } }
+      if (!nxt) break;
+      order.push(nxt); cur = nxt;
+    }
+    return order.indexOf(status);
   }
 
   /* ============================================================
@@ -367,9 +383,22 @@
     var phaseGates = ((job._meta && job._meta.gateIndex) || []).filter(function (g) { return g.phase === phaseName; });
     if (phaseGates.length) {
       html += "<h4>" + esc(phaseName) + " checklist</h4>";
+      var nextSt = nextStatusOf(job), jobIdx = chainIndex(job.status);
       phaseGates.forEach(function (g, gi) {
         var pr = gateProgress(g);
         var canGate = can("gate", { gatePhase: g.phase });
+        /* where the job stands vs this gate (Brad 2026-09-02: "after I advanced
+           through gate 3 it doesn't reset") — a gate the status has already
+           passed reads "passed · N open" (pushed through, items still owed) or
+           "cleared"; the gate gating the NEXT step is marked "now". Boxes stay
+           tickable either way. */
+        var tIdx = g.statusTarget ? chainIndex(g.statusTarget) : -1;
+        var passed = tIdx > -1 && jobIdx > -1 && jobIdx >= tIdx;
+        var isNow = !!(nextSt && g.statusTarget === nextSt);
+        var openN = pr.total - pr.done;
+        var badge = passed
+          ? (openN ? '<span class="pct passed">passed · ' + openN + " open</span>" : '<span class="pct cleared">cleared</span>')
+          : '<span class="pct' + (isNow ? " now" : "") + '">' + pr.done + "/" + pr.total + (isNow ? " · now" : "") + "</span>";
         var row = function (b) {
           return '<div class="fxc-gaterow ' + (b.checked ? "on" : "") + (canGate ? "" : " ro") + '"' +
             (canGate ? ' data-toggle="1" data-gate="' + esc(g.gateName) + '" data-text="' + esc(b.text) + '"' : "") + ">" +
@@ -384,8 +413,7 @@
         var isOpen = hasBoxes && !!revealState(job.id)[g.gateName];
         html += '<div class="fxc-gatehead' + (hasBoxes ? " more" : "") + (isOpen ? " exp" : "") + '"' +
           (hasBoxes ? ' data-reveal="fxc-gopen-' + gi + '" data-gate="' + esc(g.gateName) + '"' : "") + ">" +
-          '<span class="gname">' + esc(g.gateName) + "</span>" +
-          '<span class="pct">' + pr.done + "/" + pr.total + "</span></div>";
+          '<span class="gname">' + esc(g.gateName) + "</span>" + badge + "</div>";
         if (hasBoxes) {
           html += '<div class="fxc-reveal' + (isOpen ? " open" : "") + '" id="fxc-gopen-' + gi + '">';
           g.boxes.forEach(function (b) { html += row(b); });
