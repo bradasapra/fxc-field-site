@@ -434,6 +434,12 @@ const BUCKET_META = {
 };
 const BOARD_ORDER = ["upcoming","active","onhold","closeout","closed"];
 const money = n => (n==null) ? "—" : new Intl.NumberFormat("en-CA",{style:"currency",currency:"CAD",maximumFractionDigits:0}).format(n);
+/* billed-vs-quoted delta, signed: "Δ $0" · "Δ +$500" · "Δ −$200" (the /variance headline) */
+const deltaLabel = (billed, quote) => {
+  if (billed==null || quote==null) return "Δ —";
+  const d = billed - quote;
+  return "Δ " + (d>0 ? "+" : d<0 ? "−" : "") + money(Math.abs(d));
+};
 const MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const MONTHS_LONG=["January","February","March","April","May","June","July","August","September","October","November","December"];
 /* the vault sanctions PROSE date windows ("mid–late September 2026") beside
@@ -588,7 +594,8 @@ function cardHTML(j){
   const att = j.photos ? `<span class="chip att">📷 ${j.photos}</span>` : "";
   const ck = pr ? `<span class="chip ck${pr.pct===100?" ok":""}">☑ ${pr.done}/${pr.total}</span>` : "";
   const stage = (j.bucket==="closeout") ? `<div class="stagechip">${esc(normalizeStage(j.stage))}</div>` : "";
-  const money_ = (j.money&&j.money.quote) ? `<div class="money">${money(j.money.quote)}</div>` : "";
+  const money_ = (j.money&&j.money.billed!=null) ? `<div class="money" title="Billed (from /variance) vs quoted">${money(j.money.billed)} billed · ${deltaLabel(j.money.billed,j.money.quote)}</div>`
+               : (j.money&&j.money.quote) ? `<div class="money">${money(j.money.quote)}</div>` : "";
   const moved = isMoved(j) ? `<span class="moved-badge">moved</span>` : "";
   const bar = pr ? `<div class="bar${pr.green?" g":""}"><i style="width:${pr.pct}%"></i></div>
       <div class="barlabel"><span>${pr.label}</span><span>${pr.done}/${pr.total}</span></div>` : "";
@@ -1115,7 +1122,12 @@ function richDetail(j){
       <dt>Total</dt><dd><b>${money(j.money.quote)}</b> + HST</dd>
       <dt>Deposit</dt><dd>${money(j.money.deposit)} ${depositState(j.money.depositDate)} (50%)</dd>
       <dt>Balance</dt><dd>Due on completion · HST not included</dd>
+      ${j.money.billed!=null?`<dt>Billed</dt><dd><b>${money(j.money.billed)}</b> · ${deltaLabel(j.money.billed,j.money.quote)} <span class="note">(/variance)</span></dd>`:""}
     </dl>
+    ${j.variance?`<h4>Variance (closeout)</h4>
+    <div class="scope">${mdi(j.variance)}</div>`:""}
+    ${j.lessons?`<h4>Related lessons</h4>
+    <div class="scope">${mdi(j.lessons)}</div>`:""}
     <h4>Gate progress</h4>
     ${gates}
     <h4>Documents &amp; links</h4>

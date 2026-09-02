@@ -133,6 +133,14 @@
     return isFinite(n) ? n : null;
   }
 
+  /* collapse any multi-line input to ONE line: fragments trimmed, blanks dropped,
+     joined with " · " (the vault's own in-line list idiom). Every append is a
+     single-line edit — a textarea's Enter must never become a second raw line. */
+  function oneLine(text) {
+    return String(text == null ? "" : text).split(/\r?\n/)
+      .map(function (s) { return s.trim(); }).filter(Boolean).join(" · ");
+  }
+
   /* a "blank-ish" frontmatter value: empty, [], false, null */
   function fmStr(v) {
     if (v == null) return "";
@@ -296,7 +304,7 @@
 
   /* locate the line index of each "## Section" header we care about */
   function indexSections(rawLines, bodyStart) {
-    var idx = { scope: -1, links: -1, materials: -1, schedule: -1, gates: -1, readings: -1, product: -1, notes: -1 };
+    var idx = { scope: -1, links: -1, materials: -1, schedule: -1, gates: -1, readings: -1, product: -1, notes: -1, variance: -1, lessons: -1 };
     for (var i = bodyStart; i < rawLines.length; i++) {
       var t = rawLines[i].trim().toLowerCase();
       if (t.indexOf("## ") !== 0) continue;
@@ -309,6 +317,8 @@
       else if (h.indexOf("readings") === 0) idx.readings = i;
       else if (h.indexOf("product usage") === 0) idx.product = i;
       else if (h === "notes") idx.notes = i;
+      else if (h.indexOf("variance") === 0) idx.variance = i;         // "## Variance (closeout)" — written by /variance (2809, 2026-09-02)
+      else if (h.indexOf("related lessons") === 0) idx.lessons = i;  // "## Related lessons (N found)" — won-deal / insights-lookup
     }
     return idx;
   }
@@ -556,6 +566,17 @@
     try { return getSectionText(rawLines, idx.scope); } catch (e) { return ""; }
   }
 
+  /* display-only prose of a machine-written section (Variance / Related lessons):
+     the section text minus the template's own guidance lines — a whole line
+     wrapped as _(…)_ ("machine-owned — don't hand-edit"). Read, never written. */
+  function sectionProse(rawLines, headerIdx) {
+    if (headerIdx == null || headerIdx < 0) return "";
+    var t;
+    try { t = getSectionText(rawLines, headerIdx); } catch (e) { return ""; }
+    if (!t) return "";
+    return t.split("\n").filter(function (l) { return !/^_\(.*\)_$/.test(l.trim()); }).join("\n").trim();
+  }
+
   /* buildup <- "Buildup (products by layer):" bullets within Scope.
      bullet form: "- Primer / grout: Series 288 ..., DFT 6.0 mils" */
   function parseBuildup(scopeText) {
@@ -741,7 +762,8 @@
         quote: toNum(get("quote_value")),
         deposit: toNum(get("deposit_amount")),
         depositDate: (function () { var s = fmStr(get("deposit_received")); return s && s !== "false" ? s : null; })(),
-        invoiced: (function () { var s = fmStr(get("invoiced")); return !!(s && s !== "false"); })()
+        invoiced: (function () { var s = fmStr(get("invoiced")); return !!(s && s !== "false"); })(),
+        billed: toNum(get("billed_value"))   // written by /variance at closeout (2809, 2026-09-02); null until then
       },
       scope: scopeText,
       on_hold: on_hold,
@@ -755,6 +777,9 @@
       readings: parsedExtra.readings || null,
       usage: parsedExtra.usage || null,
       linksList: parsedExtra.linksList || [],
+      /* closeout prose the vault's skills write (Variance / Related lessons) — display only, never writable */
+      variance: parsedExtra.variance || "",
+      lessons: parsedExtra.lessons || "",
 
       /* REQUIRED safe defaults so the UNGUARDED v1 richDetail never throws */
       buildup: parsedExtra.buildup || [],
@@ -812,6 +837,8 @@
     var readings = parseReadings(rawLines, sectionIdx);
     var usage = parseUsage(rawLines, sectionIdx);
     var linksList = parseLinks(rawLines, sectionIdx);
+    var variance = sectionProse(rawLines, sectionIdx.variance);
+    var lessons = sectionProse(rawLines, sectionIdx.lessons);
     var maps = findMapsLink(rawLines, sectionIdx, fmStr(fm.address));
     var photos = fmStr(fm.site_photos) ? 0 : 0; // 0 unless explicitly countable; keep safe default
 
@@ -826,6 +853,8 @@
       readings: readings,
       usage: usage,
       linksList: linksList,
+      variance: variance,
+      lessons: lessons,
       gates: gatesParsed.gates,
       maps: maps,
       photos: photos,
@@ -1225,10 +1254,13 @@
       throw new Error("appendNote: refused — target is inside protected prose");
     }
 
-    var noteLine = "- " + today() + " (" + role() + "): " + String(text).trim();
+    // ONE line, always: a multi-line textarea entry is joined with " · " so the
+    // append stays a single bullet (2809 aa7b6f4 landed a bullet + an orphan line)
+    var body = oneLine(text);
+    var noteLine = "- " + today() + " (" + role() + "): " + body;
     lines.splice(insertAt + 1, 0, noteLine);
     bumpUpdated(job, lines);
-    var detail = String(text).trim();
+    var detail = body;
     if (detail.length > 50) detail = detail.slice(0, 47) + "...";
     var msg = "[" + role() + "] note " + job.jobNumber + " — " + detail;
     return { newText: joinLines(job, lines), message: msg };
