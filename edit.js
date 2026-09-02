@@ -419,7 +419,8 @@
           html += '<div class="fxc-btnrow">' +
             '<button class="fxc-btn" id="fxc-advance" disabled data-next="' + esc(next) + '">' + esc(label) + "</button>" +
             (canBulkHere ? '<button class="fxc-btn" id="fxc-advance-bulk" data-next="' + esc(next) + '">✓ Check all (' + openN + ") &amp; advance</button>" : "") +
-            (canForceHere ? '<button class="fxc-btn sec" id="fxc-advance-force" data-next="' + esc(next) + '">Advance with ' + openN + " open…</button>" : "") +
+            (canForceHere ? '<button class="fxc-btn sec" id="fxc-advance-force" data-next="' + esc(next) + '">Advance with ' + openN + " open on " +
+              esc(String(g.gateName).replace(/\s+[—-]\s+.*$/, "")) + "…</button>" : "") +
             "</div>";
           html += '<div class="fxc-hint">Finish “' + esc(g.gateName) + '” — or Check all ticks the ' + openN +
             " open item" + (openN === 1 ? "" : "s") + " (recorded as a bulk-confirm)" +
@@ -1010,7 +1011,8 @@
         '<div class="fxc-btnrow">' +
         '<button class="fxc-btn sec" id="fxc-cf-open">Open the checklist →</button>' +
         (canBulk ? '<button class="fxc-btn" id="fxc-cf-bulk">✓ Check all &amp; advance to ' + esc(stageLabel(target)) + "</button>" : "") +
-        (canForce ? '<button class="fxc-btn sec" id="fxc-cf-force">Advance with ' + openCount + " open…</button>" : "") +
+        (canForce ? '<button class="fxc-btn sec" id="fxc-cf-force">Advance with ' + openCount + " open on " +
+          esc(String(firstBlocked.gate.gateName).replace(/\s+[—-]\s+.*$/, "")) + "…</button>" : "") +
         "</div>" +
         (canBulk ? '<span class="soon">Check all = the ' + openCount + " open item" + (openCount === 1 ? "" : "s") +
           " get ticked in the advance commit itself, recorded as a bulk-confirm (not verified item-by-item)." +
