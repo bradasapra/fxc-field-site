@@ -322,8 +322,20 @@
     for (var i = r.start + 1; i < r.end; i++) {
       var m = rawLines[i].match(/^\s*-\s*([^:]+):\s*(.+)$/);
       if (!m) continue;
-      var target = m[2].trim().replace(/^`/, "").replace(/`$/, "");
-      out.push({ label: m[1].trim(), target: target, url: /^https?:\/\//i.test(target) });
+      /* the target is the `code span` when the bullet has one (the vault's
+         idiom for paths — 2809 wraps them and follows with a parenthetical
+         note that may run onto continuation lines); otherwise the whole
+         value up to a trailing " (note)". A bare URL stays a URL. */
+      var rest = m[2].trim();
+      var code = rest.match(/^`([^`]+)`\s*(.*)$/);
+      var target, note = "";
+      if (code) { target = code[1].trim(); note = code[2].trim(); }
+      else {
+        var paren = rest.match(/^(\S.*?)\s+\((.*)$/);
+        target = paren && !/^https?:\/\//i.test(rest) ? paren[1].trim() : rest;
+        note = paren && target !== rest ? "(" + paren[2] : "";
+      }
+      out.push({ label: m[1].trim(), target: target, note: note, url: /^https?:\/\//i.test(target) });
     }
     return out;
   }
@@ -712,7 +724,7 @@
       contact: contact,
       address: address,
       maps: maps,
-      segment: expandSegment(get("segment")),
+      segment: expandSegment(fmStr(get("segment"))), // fmStr: the enum carries inline comments (2809)
       system: stripWiki(get("coating_system")),
       systemDesc: "",
       sqft: sqftNum == null ? 0 : sqftNum,

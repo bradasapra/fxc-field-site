@@ -611,7 +611,8 @@
   function mdi(s) {
     return esc(s)
       .replace(/\[\[([^\]|]*)(?:\|([^\]]*))?\]\]/g, function (m, p, a) { return (a || p).trim(); })
-      .replace(/\*\*([^*]+?)\*\*/g, "<b>$1</b>");
+      .replace(/\*\*([^*]+?)\*\*/g, "<b>$1</b>")
+      .replace(/(^|[\s(>])\*([^*\s][^*\n]*?)\*(?=[\s).,;:!?<]|$)/g, "$1<i>$2</i>"); // word-bounded *italic* only
   }
 
   function tPrep(job) {
@@ -695,7 +696,7 @@
       '<div class="moneyrow"><div class="amt">' + money(m.quote) + '<span> + HST</span></div>' +
       '<div class="bal">balance<br>due on completion</div></div>' +
       (m.deposit ? '<div class="dep"><span class="ck">' + (m.depositDate ? "✓" : "·") + '</span>Deposit ' + money(m.deposit) +
-        (m.depositDate ? " received " + shortDate(m.depositDate) : " — pending") + "</div>" : "") +
+        (m.depositDate ? (/^\d{4}-\d{2}-\d{2}/.test(String(m.depositDate)) ? " received " + shortDate(m.depositDate) : " received") : " — pending") + "</div>" : "") +
       '<div class="inv-status">' + (m.invoiced ? "invoiced " + shortDate(m.invoiced) : "not yet invoiced") + "</div></div>";
   }
   function tLinks(job) {

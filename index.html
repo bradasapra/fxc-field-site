@@ -452,9 +452,13 @@ const esc = s => (s==null?"":String(s)).replace(/[&<>"']/g,c=>({"&":"&amp;","<":
 /* the job's size as the record states it: area in sqft, or a unit-bearing
    measure written verbatim ("390 lnft" — seam jobs); "" when neither exists */
 const measureOf = j => j.measure || (j.sqft ? j.sqft.toLocaleString() + " sqft" : "");
+/* deposit_received is a DATE in SCHEMA, but records also carry a bare
+   `true` (received, date unknown — 2809) — never print "received true" */
+const depositState = d => !d ? "— pending" : isISO(d) ? `received ${fmtDate(d)}` : /^true$/i.test(String(d)) ? "received (date to confirm)" : `received ${esc(String(d))}`;
 const mdi = s => esc(s)
   .replace(/\[\[([^\]|]*)(?:\|([^\]]*))?\]\]/g,(m,p,a)=>(a||p).trim())
-  .replace(/\*\*([^*]+?)\*\*/g,"<b>$1</b>");
+  .replace(/\*\*([^*]+?)\*\*/g,"<b>$1</b>")
+  .replace(/(^|[\s(>])\*([^*\s][^*\n]*?)\*(?=[\s).,;:!?<]|$)/g,"$1<i>$2</i>"); // *italic* only when word-bounded (never "3 * 4")
 
 function checklistProgress(j){
   if(!j.checklists) return null;
@@ -1021,9 +1025,10 @@ function docLinksHTML(j){
   if(j.linksList && j.linksList.length){
     const ic = L => /maps/i.test(L.label) ? "🗺️" : /folder/i.test(L.label) ? "🗂️"
       : /discord/i.test(L.label) ? "💬" : /pds|sds|quote|manual/i.test(L.label) ? "📄" : "🔗";
+    const note = L => L.note ? ` <span style="color:var(--ink-faint);font-size:11px">${esc(L.note)}</span>` : "";
     let rows = j.linksList.map(L => L.url
-      ? `<a href="${esc(L.target)}" target="_blank" rel="noopener">${ic(L)} ${esc(L.label)}</a>`
-      : `<span style="color:var(--ink-dim)">${ic(L)} ${esc(L.label)} — <span style="color:var(--ink-faint);font-size:12px">${esc(L.target)}</span></span>`
+      ? `<span><a href="${esc(L.target)}" target="_blank" rel="noopener">${ic(L)} ${esc(L.label)}</a>${note(L)}</span>`
+      : `<span style="color:var(--ink-dim)">${ic(L)} ${esc(L.label)} — <span style="color:var(--ink-faint);font-size:12px">${esc(L.target)}</span>${note(L)}</span>`
     ).join("");
     if(!j.linksList.some(L=>/discord/i.test(L.label)))
       rows += `<span style="color:var(--ink-faint)">💬 Discord job thread — to be created</span>`;
@@ -1085,14 +1090,13 @@ function richDetail(j){
         <span>👤 ${esc(j.contact.name)} · ${esc(j.contact.phone || j.contact.email || "")}</span>
         <span class="g-dates">🗓 Won <b>${fmtDate(j.dates.won)}</b> · client wants <b>${fmtDate(j.dates.requested)}</b> · start ${fmtDate(j.dates.start)} → ${fmtDate(j.dates.end)}</span>
       </div>
-      <div class="note g-note">Sequence-driven: coat between framing/spray-foam and finish — confirm dates with ${esc(j.contact.name.split(" ")[0])}.</div>
     </div>
     <h4>Scope</h4>
     <div class="scope">${mdi(j.scope)}</div>
     <h4>Prep</h4>
     <div class="scope">${mdi(j.prep)}</div>
-    <h4>The build · products by layer</h4>
-    <ul class="layers">${j.buildup.map(l=>`<li><b>${esc(l.layer)}</b> — ${esc(l.product)}<span class="dft">${esc(l.dft)}</span></li>`).join("")}</ul>
+    ${j.buildup&&j.buildup.length?`<h4>The build · products by layer</h4>
+    <ul class="layers">${j.buildup.map(l=>`<li><b>${esc(l.layer)}</b> — ${esc(l.product)}<span class="dft">${esc(l.dft)}</span></li>`).join("")}</ul>`:""}
     ${materialsHTML(j)}
     ${captureTablesHTML(j)}
     <h4>⚠ Conditions &amp; spec limits</h4>
@@ -1109,7 +1113,7 @@ function richDetail(j){
     <h4>Quote</h4>
     <dl class="kv">
       <dt>Total</dt><dd><b>${money(j.money.quote)}</b> + HST</dd>
-      <dt>Deposit</dt><dd>${money(j.money.deposit)} received ${fmtDate(j.money.depositDate)} (50%)</dd>
+      <dt>Deposit</dt><dd>${money(j.money.deposit)} ${depositState(j.money.depositDate)} (50%)</dd>
       <dt>Balance</dt><dd>Due on completion · HST not included</dd>
     </dl>
     <h4>Gate progress</h4>
