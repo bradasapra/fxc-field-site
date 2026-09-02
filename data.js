@@ -1016,6 +1016,21 @@
         throw new Error("setStatus: bulk check-all is full scope (Brad/Dan) only — gates clear item-by-item");
       }
     }
+    /* opts.force = advance WITH gate items left open: the honest third option
+       for a job that landed mid-execution (Brad 2026-09-02). Nothing is ticked
+       — the open boxes keep telling the crew what's still owed — and the commit
+       records which gate, how many, and why. Full scope only, reason required,
+       adjacency still enforced (one step at a time). Demo sandbox exempt. */
+    if (opts.force) {
+      var fMode = FXC.state && FXC.state.mode;
+      var fScope = FXC.state && FXC.state.role && FXC.state.role.scope;
+      if (fMode !== "demo" && fScope !== "full") {
+        throw new Error("setStatus: advancing with open gate items is full scope (Brad/Dan) only");
+      }
+      if (!opts.reason || !String(opts.reason).trim()) {
+        throw new Error("setStatus: a reason is required to advance with gate items left open");
+      }
+    }
     var fromStatus = fmStr(fmEntry(job, "status") ? fmEntry(job, "status").value : "") || "won";
 
     var trans = TRANSITIONS[toStatus];
@@ -1043,7 +1058,7 @@
           if (!matchG || (g.statusTarget && g.statusTarget === toStatus)) matchG = g;
         }
       });
-      if (matchG && !opts.bulk) {
+      if (matchG && !opts.bulk && !opts.force) {
         var total = matchG.boxes.length;
         var done = 0;
         matchG.boxes.forEach(function (b) { if (b.checked) done++; });
@@ -1072,6 +1087,19 @@
       }
     }
 
+    // pushed through: name the gate + how many items stay open + why (boxes untouched)
+    var forceNote = "";
+    if (opts.force) {
+      var reasonTxt = String(opts.reason).replace(/\s+/g, " ").trim();
+      if (matchG) {
+        var openLeft = matchG.boxes.filter(function (b) { return !b.checked; }).length;
+        forceNote = " — \"" + matchG.gateName + "\": " + openLeft + " item" + (openLeft === 1 ? "" : "s") +
+          " left open (pushed through) — " + reasonTxt;
+      } else {
+        forceNote = " — pushed through — " + reasonTxt;
+      }
+    }
+
     var statusE = fmEntry(job, "status");
     if (!statusE) throw new Error("setStatus: no status frontmatter line");
     rewriteFmLine(lines, statusE, toStatus);
@@ -1087,7 +1115,7 @@
     var msg = opts.back
       ? "[" + role() + "] revert " + job.jobNumber + " " + fromStatus + " -> " + toStatus +
         (opts.reason ? " — " + String(opts.reason).replace(/\s+/g, " ").trim() : "")
-      : "[" + role() + "] advance " + job.jobNumber + " " + fromStatus + " -> " + toStatus + bulkNote;
+      : "[" + role() + "] advance " + job.jobNumber + " " + fromStatus + " -> " + toStatus + bulkNote + forceNote;
 
     var result = { newText: newText, message: msg };
 
@@ -1268,6 +1296,14 @@
       } else if (trailer) {
         var b = /^"(.+)": (\d+) items? bulk-confirmed/.exec(trailer);
         if (b) { e.bulkGate = b[1]; e.bulkCount = Number(b[2]); }
+        // pushed through: '"<gate>": N items left open (pushed through) — <reason>' | 'pushed through — <reason>'
+        var f = /^"(.+)": (\d+) items? left open \(pushed through\) — ([\s\S]*)$/.exec(trailer) ||
+                /^pushed through — ([\s\S]*)$/.exec(trailer);
+        if (f) {
+          if (f.length === 4) { e.openGate = f[1]; e.openCount = Number(f[2]); e.reason = f[3]; }
+          else { e.openCount = 0; e.reason = f[1]; }
+          e.pushedThrough = true;
+        }
       }
     } else {
       var d = /^— (.*)$/.exec(e.detail);

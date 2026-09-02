@@ -410,12 +410,20 @@
            rules as the move popup: canEdit "gate-bulk", never crew; the open
            items are ticked in the advance commit, recorded as a bulk-confirm) */
         var openN = (!ready && g) ? (function () { var p = gateProgress(g); return p.total - p.done; })() : 0;
-        if (!ready && g && can("gate-bulk")) {
+        var canBulkHere = can("gate-bulk"), canForceHere = can("status-force");
+        if (!ready && g && (canBulkHere || canForceHere)) {
+          /* three honest answers to a blocked gate (Brad 2026-09-02): finish the
+             items · Check all (ticks them, recorded as bulk-confirm) · Advance
+             with them OPEN (nothing ticked, reason recorded — for items that
+             genuinely didn't happen on a mid-execution job) */
           html += '<div class="fxc-btnrow">' +
             '<button class="fxc-btn" id="fxc-advance" disabled data-next="' + esc(next) + '">' + esc(label) + "</button>" +
-            '<button class="fxc-btn" id="fxc-advance-bulk" data-next="' + esc(next) + '">✓ Check all (' + openN + ") &amp; advance</button></div>";
+            (canBulkHere ? '<button class="fxc-btn" id="fxc-advance-bulk" data-next="' + esc(next) + '">✓ Check all (' + openN + ") &amp; advance</button>" : "") +
+            (canForceHere ? '<button class="fxc-btn sec" id="fxc-advance-force" data-next="' + esc(next) + '">Advance with ' + openN + " open…</button>" : "") +
+            "</div>";
           html += '<div class="fxc-hint">Finish “' + esc(g.gateName) + '” — or Check all ticks the ' + openN +
-            " open item" + (openN === 1 ? "" : "s") + " in the advance commit, recorded as a bulk-confirm.</div>";
+            " open item" + (openN === 1 ? "" : "s") + " (recorded as a bulk-confirm)" +
+            (canForceHere ? " — or Advance with open leaves them unticked and records your reason." : ".") + "</div>";
         } else {
           html += '<button class="fxc-btn" id="fxc-advance" ' + (ready ? "" : "disabled") +
             ' data-next="' + esc(next) + '">' + esc(label) + "</button>";
@@ -571,6 +579,9 @@
         edit.commit(job, fnB, "gate-bulk", { toStatus: nextB });
       };
     }
+    // advance with gate items left open (reason sheet; full scope only — see canEdit "status-force")
+    var advForce = wrap.querySelector("#fxc-advance-force");
+    if (advForce) advForce.onclick = function () { edit.confirmForce(job, advForce.getAttribute("data-next")); };
     // backward correction (reason sheet + Back-to picker)
     var backBtn = wrap.querySelector("#fxc-move-back");
     if (backBtn) backBtn.onclick = function () { edit.confirmBack(job, statusBefore(job.status)); };
@@ -970,6 +981,9 @@
        advance commit itself, recorded as a bulk-confirm so the audit trail
        shows the items weren't verified one-by-one. */
     var canBulk = ((FXC.state && FXC.state.mode) || null) === "demo" || auth().canEdit(job, "gate-bulk");
+    /* single-hop only: "Advance with N open" leaves the boxes as they are and
+       records the reason — the honest route for items that didn't happen */
+    var canForce = hops.length === 1 && (((FXC.state && FXC.state.mode) || null) === "demo" || auth().canEdit(job, "status-force"));
     var openCount = states.reduce(function (a, h) {
       return a + (h.gate ? h.gate.boxes.filter(function (b) { return !b.checked; }).length : 0);
     }, 0);
@@ -996,9 +1010,11 @@
         '<div class="fxc-btnrow">' +
         '<button class="fxc-btn sec" id="fxc-cf-open">Open the checklist →</button>' +
         (canBulk ? '<button class="fxc-btn" id="fxc-cf-bulk">✓ Check all &amp; advance to ' + esc(stageLabel(target)) + "</button>" : "") +
+        (canForce ? '<button class="fxc-btn sec" id="fxc-cf-force">Advance with ' + openCount + " open…</button>" : "") +
         "</div>" +
         (canBulk ? '<span class="soon">Check all = the ' + openCount + " open item" + (openCount === 1 ? "" : "s") +
-          " get ticked in the advance commit itself, recorded as a bulk-confirm (not verified item-by-item).</span>" : "") +
+          " get ticked in the advance commit itself, recorded as a bulk-confirm (not verified item-by-item)." +
+          (canForce ? " Advance with open = nothing ticked; the gate, the count and your reason ride in the commit." : "") + "</span>" : "") +
         "</div>";
     }
     var doneItems = states.reduce(function (a, h) { return a + (h.progress ? h.progress.done : 0); }, 0);
@@ -1044,6 +1060,50 @@
       closeSheet();
       runChain(job, hops, 0, { bulk: true });
     };
+    var forceBtn = sh.querySelector("#fxc-cf-force");
+    if (forceBtn) forceBtn.onclick = function () { closeSheet(); edit.confirmForce(job, hops[0]); };
+  };
+
+  /* Advance WITH gate items left open — the honest third option for a job that
+     landed mid-execution (Brad 2026-09-02: hard gates you should be able to
+     push through without pretending). Full scope only, reason required, one
+     step at a time. The open boxes stay open (never retro-ticked) so the
+     checklist keeps telling the crew what's still owed; the commit names the
+     gate, the count and the reason. Forward twin of confirmBack. */
+  edit.confirmForce = function (job, toStatus) {
+    if (!job || !toStatus) return;
+    injectStyle();
+    var demoSandbox = ((FXC.state && FXC.state.mode) || null) === "demo" && isVaultJob(job);
+    if (!demoSandbox && !auth().canEdit(job, "status-force")) {
+      app().toast && app().toast("Advancing with open gate items is a Brad/Dan move — it's committed with your name and reason.", "err");
+      return;
+    }
+    var T = data().TRANSITIONS[toStatus];
+    var g = T ? gateByMatch(job, T.gate) : null;
+    var open = g ? g.boxes.filter(function (b) { return !b.checked; }) : [];
+    var fromPh = data().phaseOf(job.status), toPh = data().phaseOf(toStatus);
+    var head = "<h3>" + esc("#" + job.jobNumber) + " · Advance with items open</h3>";
+    var will = '<div class="fxc-will"><span class="miss">' + open.length + " item" + (open.length === 1 ? "" : "s") +
+      (g ? ' on “' + esc(g.gateName) + '”' : "") + " stay OPEN</span> — nothing gets ticked.<br>" +
+      open.slice(0, 6).map(function (b) { return "• " + esc(b.text); }).join("<br>") + (open.length > 6 ? "<br>…" : "") +
+      "<br>• set <b>" + esc(stageLabel(job.status)) + " → " + esc(stageLabel(toStatus)) + "</b>" +
+      (fromPh !== toPh ? "<br>• move the file to <b>10-jobs/" + esc(toPh) + "/</b>" : "") +
+      "<br>• commit as <b>" + esc(auth().actorName()) + "</b> — the gate, the count and your reason ride in the git history" +
+      (demoSandbox ? '<br><span class="soon">Preview: applies here only.</span>' : "") + "</div>" +
+      '<label class="fxc-bklbl" for="fxc-fc-reason">Reason (required)</label>' +
+      '<input id="fxc-fc-reason" class="fxc-bkin" type="text" placeholder="e.g. landed mid-execution · photos not taken · no batch numbers on pails">';
+    var sh = sheet(head + will +
+      '<button class="fxc-btn" id="fxc-fc-go">Advance to ' + esc(stageLabel(toStatus)) + " with " + open.length + " open</button>" +
+      '<button class="fxc-btn sec" id="fxc-fc-cancel">Cancel</button>');
+    var reason = sh.querySelector("#fxc-fc-reason");
+    sh.querySelector("#fxc-fc-go").onclick = function () {
+      var r = String(reason.value || "").trim();
+      if (!r) { reason.classList.add("bkerr"); reason.focus(); app().toast && app().toast("A reason is required to advance with items left open.", "err"); return; }
+      closeSheet();
+      var fn = function (j) { var res = data().setStatus(j, toStatus, { force: true, reason: r }); res._origPath = j._meta.path; return res; };
+      edit.commit(job, fn, "status-force", { toStatus: toStatus });
+    };
+    sh.querySelector("#fxc-fc-cancel").onclick = closeSheet;
   };
 
   /* close the popup, open the work order, scroll to the named gate and flash it */

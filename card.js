@@ -1262,7 +1262,9 @@
         out.push({ date: e.date || "", tag: "✓", label: "Advanced · " + (e.role || "FXC"),
           body: "<b>" + esc(e.from) + " → " + esc(e.to) + "</b>" +
             (e.bulkCount ? " — " + e.bulkCount + " gate item" + (e.bulkCount === 1 ? "" : "s") +
-              " bulk-confirmed (not verified item-by-item)" : "") });
+              " bulk-confirmed (not verified item-by-item)" : "") +
+            (e.pushedThrough ? " — pushed through with " + (e.openCount || 0) + " item" + (e.openCount === 1 ? "" : "s") +
+              " left open" + (e.reason ? ": " + esc(e.reason) : "") : "") });
       } else if (e.verb === "revert") {
         out.push({ date: e.date || "", tag: "↩", label: "Reverted · " + (e.role || "FXC"),
           body: "<b>" + esc(e.from) + " → " + esc(e.to) + "</b>" +
