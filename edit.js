@@ -202,7 +202,7 @@
     try { res = transformFn(job); }
     catch (e) { app().toast && app().toast((e && e.message) || "Edit failed.", "err"); return Promise.resolve(false); }
 
-    return writeOnce(job._meta.path, job._meta.sha, res, transformFn)
+    return writeOnce(job._meta.path, job._meta.sha, res, transformFn, field, opts)
       .then(function (applied) { return applied; })
       ["catch"](function (e) {
         /* Failure classification (offline queue v1): a DEFINITIVE network
@@ -235,7 +235,7 @@
     return true;
   }
 
-  function writeOnce(path, sha, res, transformFn) {
+  function writeOnce(path, sha, res, transformFn, field, opts) {
     var wopts = res.move ? { move: res.move } : {};
     return data().writeJob(path, res.newText, sha, res.message, wopts)
       .then(function (r) { return applyWritten(res, r); })
@@ -243,6 +243,12 @@
         if (e && e.status === 409 && transformFn) {
           // stale sha — refetch, re-locate by content, re-run, retry once
           return data().readJob(path).then(function (fresh) {
+            /* the fresh state may have left this role's scope (that race can
+               surface AS the 409) — re-run the same gate the commit opened with */
+            if (field && !auth().canEdit(fresh, field, opts)) {
+              app().toast && app().toast("The job changed and your role can't make that change any more.", "err");
+              return false;
+            }
             var res2 = transformFn(fresh);
             var wopts2 = res2.move ? { move: res2.move } : {};
             return data().writeJob(path, res2.newText, fresh._meta.sha, res2.message, wopts2)
@@ -261,10 +267,28 @@
     var finalPath = newPath || res._origPath;
     var fresh = data().parseJobMarkdown(res.newText, finalPath, sha);
     if (app().replaceJob) app().replaceJob(fresh);
-    if (drawerOpen() && typeof root.openJob === "function") root.openJob(fresh.id);
+    if (drawerOpen() && typeof root.openJob === "function") reopenKeepingPlace(fresh.id);
     app().toast && app().toast("Saved · committed as " + auth().actorName(), "ok");
     if (writeResult && writeResult.warning) app().toast && app().toast(writeResult.warning, "info");
     return true;
+  }
+
+  /* re-open the drawer on the fresh job WITHOUT losing the reader's place:
+     openJob rebuilds #drawer wholesale, which resets .dbody's scroll and
+     collapses every .fxc-form — ticking 7 gate boxes must not cost 7 full
+     re-scrolls. Same pattern refreshFieldCard uses for the srcdoc card. */
+  function reopenKeepingPlace(id) {
+    var body = document.querySelector("#drawer .dbody");
+    var keepScroll = body ? body.scrollTop : 0;
+    var openForm = document.querySelector("#drawer .fxc-form.open");
+    var openFormId = openForm ? openForm.id : null;
+    root.openJob(id); // synchronous rebuild (+ augmentDrawer via the app-glue wrap)
+    if (openFormId) {
+      var f = document.getElementById(openFormId);
+      if (f) f.classList.add("open");
+    }
+    var nb = document.querySelector("#drawer .dbody");
+    if (nb && keepScroll) nb.scrollTop = keepScroll;
   }
 
   /* demo: run the same pure transform, re-parse, re-render — nothing leaves the
@@ -597,7 +621,14 @@
     var cur = currentFieldValue(job, key);
     if (sameVal(cur, value)) { runSequential(job, updates, i + 1); return; }
     var fn = function (j) { var r = data().setField(j, key, value); r._origPath = j._meta.path; return r; };
-    edit.commit(job, fn, field).then(function () {
+    edit.commit(job, fn, field).then(function (ok) {
+      /* edit.commit resolves false (never rejects) on denial/HTTP failure —
+         marching on would end in a green "Schedule saved." over a save that
+         partly didn't happen. Stop at the failed field and say so. */
+      if (!ok) {
+        app().toast && app().toast("Schedule save stopped at " + key + " — that field and everything after it was NOT saved.", "err");
+        return;
+      }
       // after a commit the drawer re-opens with fresh job; re-read it for the next field
       var fresh = (root.JOBS || []).filter(function (x) { return x.id === job.id; })[0] || job;
       runSequential(fresh, updates, i + 1);

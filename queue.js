@@ -251,21 +251,45 @@
 
   var LOCK_KEY = "fxc.queue.lock";
   var LOCK_STALE_MS = 45000;
+  /* this tab's lock identity — ownership is verified before every renewal,
+     step, and release, so a tab whose lock was legitimately stolen (it was
+     backgrounded past LOCK_STALE_MS) ABORTS instead of re-stamping or
+     deleting the thief's live lock and double-flushing the same entries. */
+  var LOCK_OWNER = "tab-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
 
   /* multi-tab double-flush guard: a fresh lock in another tab wins;
-     a stale one (tab killed mid-flush) is stolen. */
+     a stale one (tab killed or frozen mid-flush) is stolen. */
   function takeLock() {
     try {
       var raw = root.localStorage.getItem(LOCK_KEY);
       if (raw) {
-        var t = Number((JSON.parse(raw) || {}).t);
-        if (isFinite(t) && Date.now() - t < LOCK_STALE_MS) return false;
+        var cur = JSON.parse(raw) || {};
+        if (cur.owner !== LOCK_OWNER) {
+          var t = Number(cur.t);
+          if (isFinite(t) && Date.now() - t < LOCK_STALE_MS) return false;
+        }
       }
-      root.localStorage.setItem(LOCK_KEY, JSON.stringify({ t: Date.now() }));
+      root.localStorage.setItem(LOCK_KEY, JSON.stringify({ t: Date.now(), owner: LOCK_OWNER }));
       return true;
     } catch (e) { return true; } // storage broken → single-tab reality, proceed
   }
+  function ownsLock() {
+    var raw;
+    try { raw = root.localStorage.getItem(LOCK_KEY); } catch (e) { return true; } // storage broken → single-tab reality
+    if (!raw) return false;
+    try { return (JSON.parse(raw) || {}).owner === LOCK_OWNER; } catch (e) { return false; }
+  }
+  /* heartbeat: a long flush over a slow connection easily outruns
+     LOCK_STALE_MS — re-stamp (while still the owner) so another tab can't
+     judge a LIVE flush stale, steal the lock, and replay the same FIFO head
+     into duplicate committed rows. Returns false when the lock was lost. */
+  function renewLock() {
+    if (!ownsLock()) return false;
+    try { root.localStorage.setItem(LOCK_KEY, JSON.stringify({ t: Date.now(), owner: LOCK_OWNER })); } catch (e) {}
+    return true;
+  }
   function releaseLock() {
+    if (!ownsLock()) return; // never delete another tab's live lock
     try { root.localStorage.removeItem(LOCK_KEY); } catch (e) {}
   }
 
@@ -370,19 +394,37 @@
     return readEntryJob(entry)
       .then(function (job) {
         var a = auth();
-        if (a && a.canEdit && !a.canEdit(job, entry.kind)) {
+        function scopeBlocked() {
           return {
             ok: false, blocked: true,
             error: "a queued save for #" + entry.jobNum + " is blocked — the job left this role's edit scope. Show this phone to Brad or Dan."
           };
         }
-        var res = runAsCaptured(entry, job);
+        function transformBlocked(te) {
+          /* a transform throw (e.g. the target section was renamed vault-side)
+             is NOT a signal problem — saying "no signal" would wedge the queue
+             behind this entry forever while the phone is fully online. */
+          return {
+            ok: false, blocked: true,
+            error: "a queued save for #" + entry.jobNum + " can't be applied to the current job file — " +
+              ((te && te.message) || "the record changed shape") + ". Show this phone to Brad or Dan."
+          };
+        }
+        if (a && a.canEdit && !a.canEdit(job, entry.kind)) return scopeBlocked();
+        var res;
+        try { res = runAsCaptured(entry, job); }
+        catch (te) { return transformBlocked(te); }
         return d.writeJob(job._meta.path, res.newText, job._meta.sha, entry.message, { author: entry.author })
           .then(function () { return { ok: true, newText: res.newText, path: job._meta.path }; })
           ["catch"](function (e) {
             if (e && e.status === 409) {
               return d.readJob(job._meta.path).then(function (fresh) {
-                var res2 = runAsCaptured(entry, fresh);
+                /* the same race the first-pass guard exists for can land AS a
+                   409 — re-check scope on the FRESH job before re-running */
+                if (a && a.canEdit && !a.canEdit(fresh, entry.kind)) return scopeBlocked();
+                var res2;
+                try { res2 = runAsCaptured(entry, fresh); }
+                catch (te) { return transformBlocked(te); }
                 return d.writeJob(fresh._meta.path, res2.newText, fresh._meta.sha, entry.message, { author: entry.author })
                   .then(function () { return { ok: true, newText: res2.newText, path: fresh._meta.path }; });
               });
@@ -419,12 +461,21 @@
     }
     var synced = 0;
     function step() {
+      if (!renewLock()) {
+        // the lock was stolen while this tab was frozen — the thief owns the
+        // queue now; continuing would replay entries it may already have landed
+        return Promise.resolve({ synced: synced, remaining: load().length, error: "sync was taken over by another tab.", locked: true });
+      }
       var entries = load(); // reload each step — captures added mid-flush ride along
       if (!entries.length) return Promise.resolve({ synced: synced, remaining: 0, error: null });
       var entry = entries[0];
       return flushOne(entry).then(function (r) {
         if (r.ok) {
-          queue.remove(entry.id);
+          if (!queue.remove(entry.id)) {
+            // another flusher already handled (and removed) this entry — stop
+            // instead of marching into entries it may be mid-way through
+            return { synced: synced, remaining: load().length, error: "another tab already synced this entry.", locked: true };
+          }
           synced++;
           // let the app repaint the job the commit just changed (day-close
           // intake entries change no job file — nothing to repaint)
@@ -441,11 +492,20 @@
         };
       });
     }
+    /* mid-entry heartbeat: one slow fetch inside flushOne can alone outrun
+       LOCK_STALE_MS — keep the lock alive on a timer while this tab is
+       actually running (a frozen/backgrounded tab's timer stops too, which
+       is correct: a frozen tab SHOULD lose the lock). */
+    var hb = null;
+    try { hb = setInterval(renewLock, 15000); if (hb && hb.unref) hb.unref(); } catch (e) {}
+    function finish(r) {
+      if (hb) { try { clearInterval(hb); } catch (e) {} }
+      releaseLock(); notify(); return r;
+    }
     return step().then(
-      function (r) { releaseLock(); notify(); return r; },
+      finish,
       function (e) {
-        releaseLock(); notify();
-        return { synced: synced, remaining: load().length, error: (e && e.message) || "sync failed." };
+        return finish({ synced: synced, remaining: load().length, error: (e && e.message) || "sync failed." });
       }
     );
   }

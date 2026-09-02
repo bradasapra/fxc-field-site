@@ -374,35 +374,61 @@
   }
 
   /* torn phase-move banner: listJobs found the same job in two folders (an
-     interrupted move). Full scope gets a one-tap cleanup; crew is told who to
-     call. Handles one dup per load — a second one surfaces on the reload. */
+     interrupted move). Full scope gets cleanup; crew is told who to call.
+     An UNAMBIGUOUS pair (updated: stamps differ) keeps the one-tap Clean up.
+     An ambiguous pair (same-day tear — the usual case, and the one where the
+     old later-folder heuristic could delete a backward correction) shows both
+     copies' statuses and makes a human pick which survives.
+     Handles one dup per load — a second one surfaces on the reload. */
   function tornBanner() {
     var torn = (FXC.data.lastListMeta && FXC.data.lastListMeta.torn) || [];
     if (!torn.length) return;
     var dup = torn[0];
-    banner("#" + dup.jobNumber + " exists in two folders — an interrupted move left a stale copy at " +
-      dup.stalePath + ".", "warn");
+    banner("#" + dup.jobNumber + " exists in two folders — an interrupted move left two copies.", "warn");
     var host = document.getElementById("fxc-banner");
     var role = auth().getRole();
     if (!host || !role || role.scope !== "full") {
       if (host) host.textContent += " Tell Brad or Dan — cleanup needs full scope.";
       return;
     }
-    var btn = document.createElement("button");
-    btn.textContent = "Clean up";
-    btn.setAttribute("style", "margin-left:12px;padding:3px 12px;border-radius:8px;border:1px solid var(--amber);" +
-      "background:transparent;color:var(--amber);font:inherit;font-size:12px;cursor:pointer");
-    btn.onclick = function () {
-      btn.disabled = true; btn.textContent = "Cleaning…";
-      FXC.data.removeStaleDuplicate(dup).then(function () {
-        app.toast && app.toast("Stale copy removed · committed as " + auth().actorName(), "ok");
+    function folderOf(p) { var m = String(p).match(/10-jobs\/([^/]+)\//); return m ? m[1] : p; }
+    function mkBtn(label) {
+      var b = document.createElement("button");
+      b.textContent = label;
+      b.setAttribute("style", "margin-left:12px;padding:3px 12px;border-radius:8px;border:1px solid var(--amber);" +
+        "background:transparent;color:var(--amber);font:inherit;font-size:12px;cursor:pointer");
+      return b;
+    }
+    function runCleanup(btns, removeSpec, clicked) {
+      var labels = btns.map(function (b) { return b.textContent; });
+      btns.forEach(function (b) { b.disabled = true; });
+      if (clicked) clicked.textContent = "Cleaning…";
+      FXC.data.removeStaleDuplicate(removeSpec).then(function () {
+        app.toast && app.toast("Duplicate removed · committed as " + auth().actorName(), "ok");
         loadLive();
       })["catch"](function (e) {
-        btn.disabled = false; btn.textContent = "Clean up";
+        // restore labels too — a button stuck on "Cleaning…" reads as hung
+        btns.forEach(function (b, i) { b.disabled = false; b.textContent = labels[i]; });
         app.toast && app.toast((e && e.message) || "Cleanup failed.", "err");
       });
+    }
+    if (!dup.ambiguous) {
+      host.textContent += " The copy at " + dup.stalePath + " is stale.";
+      var btn = mkBtn("Clean up");
+      btn.onclick = function () { runCleanup([btn], dup, btn); };
+      host.appendChild(btn);
+      return;
+    }
+    host.textContent += " Pick which copy is correct — the other is deleted (both survive in git history):";
+    var keepA = mkBtn("Keep " + (dup.keepStatus || folderOf(dup.keepPath)) + " (" + folderOf(dup.keepPath) + ")");
+    var keepB = mkBtn("Keep " + (dup.staleStatus || folderOf(dup.stalePath)) + " (" + folderOf(dup.stalePath) + ")");
+    // keeping A deletes B (the flagged copy); keeping B deletes A
+    keepA.onclick = function () { runCleanup([keepA, keepB], dup, keepA); };
+    keepB.onclick = function () {
+      runCleanup([keepA, keepB], { jobNumber: dup.jobNumber, stalePath: dup.keepPath, staleSha: dup.keepSha }, keepB);
     };
-    host.appendChild(btn);
+    host.appendChild(keepA);
+    host.appendChild(keepB);
   }
 
   function afterConnect() {

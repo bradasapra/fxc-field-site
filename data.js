@@ -213,7 +213,8 @@
       CO: "CO — Commercial",
       FP: "FP — Food & Beverage",
       GE: "GE — Grain Elevators",
-      AG: "AG — Agricultural"
+      AG: "AG — Agricultural",
+      RES: "RES — Residential"
     };
     return map[c] || (c ? c : "");
   }
@@ -345,7 +346,18 @@
         if (opts.notes) notes.push(line);
         continue;
       }
-      var cells = line.replace(/^\|/, "").replace(/\|$/, "").split("|").map(function (c) { return c.trim(); });
+      /* split on UNESCAPED pipes only, and unescape "\|" back to "|" — the
+         write side (escapeCell) emits it, so the read side must undo it or
+         appended cells containing a pipe reparse with shifted columns. */
+      var body = line.replace(/^\|/, "").replace(/\|$/, "");
+      var cells = [], cur = "";
+      for (var ci = 0; ci < body.length; ci++) {
+        var ch = body.charAt(ci);
+        if (ch === "\\" && body.charAt(ci + 1) === "|") { cur += "|"; ci++; continue; }
+        if (ch === "|") { cells.push(cur.trim()); cur = ""; continue; }
+        cur += ch;
+      }
+      cells.push(cur.trim());
       if (/^[-:\s]*$/.test(cells.join(""))) continue;
       if (!header) header = cells; else rows.push(cells);
     }
@@ -620,15 +632,22 @@
      MAP TO V1 JOB OBJECT
      ============================================================ */
 
-  /* parse "Name / phone / email" -> {name,phone,email} all strings */
+  /* parse "Name / phone / email" -> {name,phone,email} all strings.
+     Parts after the name classify by SHAPE, not position — real records omit
+     the phone ("Joel Vanhie / vanhiefarms@gmail.com") and blind positional
+     mapping put the email in the phone slot, breaking both action buttons. */
   function parseContact(raw) {
     var c = { name: "", phone: "", email: "" };
     var v = fmStr(raw);
     if (!v) return c;
     var parts = v.split(" / ");
     c.name = (parts[0] || "").trim();
-    c.phone = (parts[1] || "").trim();
-    c.email = (parts[2] || "").trim();
+    parts.slice(1).forEach(function (p) {
+      p = p.trim();
+      if (!p) return;
+      if (p.indexOf("@") > -1) { if (!c.email) c.email = p; return; }
+      if (!c.phone) c.phone = p; // digits or a plain token — legacy phone slot
+    });
     return c;
   }
 
@@ -856,31 +875,69 @@
     return null;
   }
 
+  /* split a raw frontmatter value into {value, comment} — the comment keeps its
+     original leading whitespace so a rewrite can re-emit it byte-identically.
+     Mirrors stripComment's rules: quoted scalar -> everything after the closing
+     quote; plain scalar -> a "#" preceded by whitespace. */
+  function splitInlineComment(rawValue) {
+    if (rawValue == null) return { value: "", comment: "" };
+    var s = String(rawValue);
+    var t = s.trim();
+    if (!t) return { value: s, comment: "" };
+    var a = t[0];
+    if (a === '"' || a === "'") {
+      var close = t.indexOf(a, 1);
+      if (close > 0) {
+        var lead = s.length - s.replace(/^\s+/, "").length;
+        var absClose = lead + close;
+        var rest = s.slice(absClose + 1);
+        if (rest.trim()) return { value: s.slice(0, absClose + 1), comment: rest };
+      }
+      return { value: s, comment: "" };
+    }
+    if (a === "#") return { value: "", comment: s };
+    var m = s.match(/^(.*?)(\s+#.*)$/);
+    if (m && m[1].trim() !== "") return { value: m[1], comment: m[2] };
+    return { value: s, comment: "" };
+  }
+
   /* set/replace a single frontmatter scalar line BY KEY, preserving the key +
-     the "key: " spacing of the original line. Mutates `lines` in place.
+     the "key: " spacing of the original line AND any inline "# ..." comment
+     (the vault's sanctioned idiom carries Brad rulings there — a value edit
+     must never eat them). Mutates `lines` in place.
      Returns true if the key existed and was rewritten. */
   function rewriteFmLine(lines, entry, newValue) {
     if (!entry) return false;
     var orig = lines[entry.lineIndex];
     // Split "  key:<spacing><value>" into indent, "key:", existing spacing, value.
     var m = orig.match(/^(\s*[A-Za-z0-9_]+:)(\s*)(.*)$/);
-    var keyPart, gap;
+    var keyPart, gap, comment;
     if (m) {
       keyPart = m[1];
+      var prev = splitInlineComment(m[3]);
+      comment = prev.comment;
+      /* a comment must never glue onto the new value. Comment-only values
+         (blank field + "# note" — the real 2797 shape) lost their leading
+         whitespace to the gap group, so restore a two-space separator; and
+         since the old "value" was really nothing, normalize the gap to the
+         vault's standard single space. */
+      if (comment && !/^\s/.test(comment)) comment = "  " + comment;
       // Preserve the existing space convention when a value was already present
       // (keeps populated-field edits tidy). If the line was empty after the
       // colon, normalize to the vault's standard single space "key: value".
-      gap = (m[3] !== "" && m[2] !== "") ? m[2] : " ";
+      gap = (prev.value.trim() !== "" && m[2] !== "") ? m[2] : " ";
     } else {
       keyPart = entry.key + ":";
       gap = " ";
+      comment = "";
     }
     // When clearing a field, emit just "key:" with no trailing space (matches the
-    // template's blank-field convention) — except keep it consistent with YAML.
+    // template's blank-field convention) — the surviving comment rides its own
+    // original whitespace either way.
     if (newValue === "") {
-      lines[entry.lineIndex] = keyPart;
+      lines[entry.lineIndex] = keyPart + comment;
     } else {
-      lines[entry.lineIndex] = keyPart + gap + newValue;
+      lines[entry.lineIndex] = keyPart + gap + newValue + comment;
     }
     return true;
   }
@@ -942,6 +999,20 @@
 
     var trans = TRANSITIONS[toStatus];
     var matchG = null;
+    /* one gated step at a time IS an engine invariant, not a UI courtesy:
+       a forward advance must come FROM the transition's declared predecessor.
+       Multi-hop jumps stay legal only as chained single steps (edit.js
+       runChain does exactly that). Backward corrections carry opts.back;
+       statuses with no TRANSITIONS entry (e.g. cancelled) keep the
+       tolerant path unchanged. */
+    if (!opts.back && fromStatus === toStatus) {
+      // most often: a 409 retry refetched a job another device already advanced
+      throw new Error("setStatus: already " + toStatus + " — another device may have advanced this job; reload and check");
+    }
+    if (trans && !opts.back && trans.from !== fromStatus) {
+      throw new Error("setStatus: " + fromStatus + " -> " + toStatus +
+        " skips steps — advance one gated step at a time (next from " + fromStatus + ")");
+    }
     // verify the gate (the gate that gates the move INTO toStatus) is 100% —
     // forward advances only; a backward correction is not gate-checked
     if (trans && !opts.back) {
@@ -1134,6 +1205,16 @@
     }
     rewriteFmLine(lines, e, written);
     bumpUpdated(job, lines);
+
+    /* a block-list value (crew:\n  - Mike) being rewritten inline must also
+       remove its continuation lines — leaving them orphaned is malformed YAML,
+       and the parser's listLines-precedence would silently resurrect the OLD
+       value on the next read. Splice LAST, highest index first, so every
+       line edit above ran against original indices. */
+    if (e.listLines && e.listLines.length) {
+      e.listLines.slice().sort(function (a, b) { return b.lineIndex - a.lineIndex; })
+        .forEach(function (l) { lines.splice(l.lineIndex, 1); });
+    }
 
     var msg = "[" + role() + "] set " + job.jobNumber + " — " + key + " " + (written === "" ? "(cleared)" : written);
     return { newText: joinLines(job, lines), message: msg };
@@ -1372,18 +1453,45 @@
       .then(function (jobs) {
         var clean = jobs.filter(Boolean);
         /* torn-move detection: the same job number in two phase folders means
-           an interrupted PUT+DELETE move. The copy in the LATER folder is the
-           move target (moves only advance); the earlier one is stale — drop it
-           from the list and surface it via lastListMeta for cleanup. */
+           an interrupted PUT+DELETE move. The move TARGET (the copy written
+           last) is the keeper — decided by the newer `updated:` stamp, because
+           moves go BOTH ways (backward corrections move files to EARLIER
+           folders; the old later-folder-wins rule deleted reverts). When the
+           stamps tie (same-day tear — common), the pair is AMBIGUOUS: fall
+           back to the later folder for display but say so, and the cleanup
+           banner must offer a human pick instead of a one-tap delete. */
+        function updatedOf(j) {
+          var e = fmEntry(j, "updated");
+          var v = e ? fmStr(e.value) : "";
+          return /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : "";
+        }
         var byNum = {};
         clean.forEach(function (j) { (byNum[j.jobNumber] = byNum[j.jobNumber] || []).push(j); });
         var torn = [];
         clean = clean.filter(function (j) {
           var grp = byNum[j.jobNumber];
           if (grp.length < 2) return true;
-          var keep = grp.reduce(function (a, b) { return a._meta.path > b._meta.path ? a : b; });
+          var keep = grp.reduce(function (a, b) {
+            var ua = updatedOf(a), ub = updatedOf(b);
+            if (ua && ub && ua !== ub) return ua > ub ? a : b;
+            return a._meta.path > b._meta.path ? a : b;
+          });
           if (j === keep) return true;
-          torn.push({ jobNumber: j.jobNumber, keepPath: keep._meta.path, stalePath: j._meta.path, staleSha: j._meta.sha });
+          /* one-tap cleanup is offered ONLY for the provably-clean forward
+             tear: the newer-stamped keeper is the direct chain successor of
+             the older copy. Everything else — equal stamps, backward moves,
+             a post-tear write landing on either copy — is indistinguishable
+             from divergence and forces the banner's human pick. */
+          var uk = updatedOf(keep), uj = updatedOf(j);
+          var cleanForward = !!(uk && uj && uk > uj &&
+            TRANSITIONS[keep.status] && TRANSITIONS[keep.status].from === j.status);
+          var ambiguous = !cleanForward;
+          torn.push({
+            jobNumber: j.jobNumber,
+            keepPath: keep._meta.path, stalePath: j._meta.path, staleSha: j._meta.sha,
+            keepSha: keep._meta.sha, keepStatus: keep.status || "", staleStatus: j.status || "",
+            ambiguous: ambiguous
+          });
           return false;
         });
         data.lastListMeta = { torn: torn };
@@ -1473,47 +1581,76 @@
       : { name: role(), email: "field@fxcoating.ca" };
 
     if (opts.move) {
-      // phase-folder move: PUT new path (NO sha) THEN DELETE old path
-      var put = {
-        message: message,
-        content: utf8ToB64(newText),
-        branch: _cfg.branch,
-        author: author,
-        committer: author
-      };
-      var newSha = null;
-      return fetch(ghBase() + "/contents/" + encodePath(opts.move.toPath), {
-        method: "PUT", headers: ghHeaders(), body: JSON.stringify(put)
-      }).then(function (res) {
-        if (!res.ok) return res.text().then(function (t) { throw mkErr(res.status, "writeJob move PUT", t); });
-        return res.json();
-      }).then(function (j) {
-        newSha = j.content && j.content.sha;
-        function delOnce() {
-          var del = {
-            message: message,
-            sha: opts.move.oldSha,
-            branch: _cfg.branch,
-            author: author,
-            committer: author
-          };
-          return fetch(ghBase() + "/contents/" + encodePath(opts.move.oldPath), {
-            method: "DELETE", headers: ghHeaders(), body: JSON.stringify(del)
-          });
+      /* phase-folder move: CAS preflight, then PUT new path (NO sha — it's a
+         create), then DELETE old path.
+         The preflight is the move's compare-and-swap: a plain write conflicts
+         on its sha, but a move PUT can't carry one — so re-GET the old path
+         first and reject with a 409 if it changed since this device read it.
+         edit.js writeOnce's existing 409 branch then refetches and rebuilds
+         the move from the FRESH content, so a concurrent edit rides along
+         instead of being silently dropped into the torn-cleanup path. */
+      return fetch(ghBase() + "/contents/" + encodePath(opts.move.oldPath) + "?ref=" + encodeURIComponent(_cfg.branch), {
+        headers: ghHeaders()
+      }).then(function (pre) {
+        if (!pre.ok) return pre.text().then(function (t) { throw mkErr(pre.status, "writeJob move preflight", t); });
+        return pre.json();
+      }).then(function (cur) {
+        if (opts.move.oldSha && cur.sha !== opts.move.oldSha) {
+          throw mkErr(409, "writeJob move preflight", "the job changed since it was read — rebuild the move from fresh content");
         }
-        return delOnce().then(function (res) {
-          if (res.ok) return { sha: newSha };
-          return delOnce().then(function (res2) {
-            if (res2.ok) return { sha: newSha };
+        var put = {
+          message: message,
+          content: utf8ToB64(newText),
+          branch: _cfg.branch,
+          author: author,
+          committer: author
+        };
+        var newSha = null;
+        return fetch(ghBase() + "/contents/" + encodePath(opts.move.toPath), {
+          method: "PUT", headers: ghHeaders(), body: JSON.stringify(put)
+        }).then(function (res) {
+          if (!res.ok) return res.text().then(function (t) { throw mkErr(res.status, "writeJob move PUT", t); });
+          return res.json();
+        }).then(function (j) {
+          newSha = j.content && j.content.sha;
+          function delOnce() {
+            var del = {
+              message: message,
+              sha: opts.move.oldSha,
+              branch: _cfg.branch,
+              author: author,
+              committer: author
+            };
+            return fetch(ghBase() + "/contents/" + encodePath(opts.move.oldPath), {
+              method: "DELETE", headers: ghHeaders(), body: JSON.stringify(del)
+            });
+          }
+          function tornResult(sawConflict) {
             /* the PUT already landed — throwing here would make the UI claim
                failure AND (on 409) re-run the transform into a sha-less
                re-PUT (422). Report the torn state instead; listJobs flags
-               the duplicate for cleanup. */
+               the duplicate for cleanup. A DELETE 409 is positive proof a
+               concurrent save landed mid-move — say so, and the banner's
+               human pick (same-day stamps are never one-tap) arbitrates. */
             return {
               sha: newSha,
-              warning: "Moved, but the old copy at " + opts.move.oldPath +
-                " couldn't be removed — it will be flagged for cleanup on the next load."
+              warning: sawConflict
+                ? "Moved, but another device saved to this job during the move — both copies were kept; pick the right one from the banner on the next load."
+                : "Moved, but the old copy at " + opts.move.oldPath +
+                  " couldn't be removed — it will be flagged for cleanup on the next load."
             };
+          }
+          return delOnce().then(function (res) {
+            if (res.ok) return { sha: newSha };
+            return delOnce().then(function (res2) {
+              if (res2.ok) return { sha: newSha };
+              return tornResult(res.status === 409 || res2.status === 409);
+            });
+          })["catch"](function () {
+            /* a DELETE whose fetch itself rejected (signal died between the
+               PUT and the DELETE) is the same torn state — never a failure:
+               the move DID land. */
+            return tornResult(false);
           });
         });
       });
