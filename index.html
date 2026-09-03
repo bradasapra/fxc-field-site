@@ -1393,7 +1393,9 @@ async function exportFieldCard(){
   try{ inlined=await Promise.all(urls.map(toDataUri)); }catch(e){}
   const allInlined=inlined.every(u=>/^data:/.test(u));
   const jc=Object.assign({},j,{photoUrls:inlined,cover:inlined[0]});
-  const html=FXC.card.doc(jc);
+  /* the saved file goes to a worker: build it AS a crew card whatever role is
+     signed in here — no money strip, dollar amounts masked (review 2026-09-03) */
+  const html=FXC.card.doc(jc,{crew:true});
   const blob=new Blob([html],{type:"text/html"});
   const a=document.createElement("a");
   a.href=URL.createObjectURL(blob); a.download=(j.jobNumber||"job")+"-field-card.html";

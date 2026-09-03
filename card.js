@@ -269,7 +269,12 @@
      renders is masked to "$—" at the escape boundary; Brad/Dan cards are untouched. */
   var MONEY_RE = /\$\s?\d[\d,]*(?:\.\d+)?/g;
   var MASK_MONEY = false;
+  /* card.doc(job, { crew: true }) builds the document AS a crew card whatever the
+     live role — the in-app "Save file" export is handed to a worker, so a Brad/Dan
+     export must carry neither the money strip nor any masked amount (review 2026-09-03) */
+  var FORCE_CREW = false;
   function crewScope() {
+    if (FORCE_CREW) return true;
     var st = (root.FXC && root.FXC.state) || {};
     return !(st.role && st.role.scope === "full");
   }
@@ -823,7 +828,7 @@
        write time (an iframe can't be trusted with its own identity). */
     var FX = root.FXC || {};
     var st = FX.state || {};
-    var full = !!(st.role && st.role.scope === "full");
+    var full = !FORCE_CREW && !!(st.role && st.role.scope === "full");
     if (!full) products = products.map(function (p) { return p.replace(MONEY_RE, "$—"); });
     return {
       seed: seed, areas: areas, products: products,
@@ -831,7 +836,7 @@
       master: (FX.products && FX.products.ready && FX.products.ready()) ? FX.products.list() : [],
       jobNumber: (job && job.jobNumber) || "",
       actor: (st.role && st.role.name) || "",
-      canMoney: !!(st.role && st.role.scope === "full"),
+      canMoney: !FORCE_CREW && !!(st.role && st.role.scope === "full"),
       dcDate: todayISO()
     };
   };
@@ -1441,8 +1446,12 @@
   };
 
   /* full standalone document — iframe srcdoc in-app, and the worker-link file */
-  card.doc = function (job) {
+  card.doc = function (job, opts) {
+    FORCE_CREW = !!(opts && opts.crew);
     MASK_MONEY = crewScope();
+    try { return card.docHtml(job); } finally { FORCE_CREW = false; MASK_MONEY = false; }
+  };
+  card.docHtml = function (job) {
     return "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">" +
       "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">" +
       "<title>" + esc(job.jobNumber) + " — FX Field card</title><style>" + card.CSS + "</style></head><body>" +

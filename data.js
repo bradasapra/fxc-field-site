@@ -1072,6 +1072,27 @@
           incomplete gate, flips EVERY open box on the gating gate in this same
           commit and records it as a bulk-confirm (the audit trail shows the
           items were not verified one-by-one). ---- */
+  /* THE gate that gates the move INTO toStatus — one rule, shared by the engine
+     (setStatus) and the drawer (edit.js STATUS row · move picker · confirm popups),
+     so the button, its count and the commit line always name the same gate.
+     Rule: among the gates whose name matches the transition's regex, prefer the
+     one whose "→ status" arrow targets toStatus; otherwise the first match. Old-
+     dialect closeout records (2774, 2800 …) carry TWO matches for warranty-issued
+     — "Gate — Financial Picture Complete" (no arrow) and "Closeout → warranty-
+     issued" — and the drawer used to pick the first while the engine gated on the
+     second (review 2026-09-03). null = no gate matches (tolerant advance). */
+  data.gateFor = function (job, toStatus) {
+    var trans = TRANSITIONS[toStatus];
+    if (!trans || !job || !job._meta) return null;
+    var hit = null;
+    (job._meta.gateIndex || []).forEach(function (g) {
+      if (trans.gate.test(g.gateName)) {
+        if (!hit || (g.statusTarget && g.statusTarget === toStatus)) hit = g;
+      }
+    });
+    return hit;
+  };
+
   data.setStatus = function (job, toStatus, opts) {
     opts = opts || {};
     /* the bulk gate-bypass is a full-scope override — enforce it in the
@@ -1121,12 +1142,7 @@
     // verify the gate (the gate that gates the move INTO toStatus) is 100% —
     // forward advances only; a backward correction is not gate-checked
     if (trans && !opts.back) {
-      (job._meta.gateIndex || []).forEach(function (g) {
-        if (trans.gate.test(g.gateName)) {
-          // prefer the gate whose statusTarget matches toStatus when ambiguous
-          if (!matchG || (g.statusTarget && g.statusTarget === toStatus)) matchG = g;
-        }
-      });
+      matchG = data.gateFor(job, toStatus);
       if (matchG && !opts.bulk && !opts.force) {
         var total = matchG.boxes.length;
         var done = 0;

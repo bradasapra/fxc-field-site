@@ -173,13 +173,8 @@
     });
     return found;
   }
-  function gateByMatch(job, re) {
-    var hit = null;
-    ((job._meta && job._meta.gateIndex) || []).forEach(function (g) {
-      if (re.test(g.gateName) && !hit) hit = g;
-    });
-    return hit;
-  }
+  /* gateByMatch (first regex match) retired 2026-09-03 — every site now asks the
+     engine (data.gateFor) so the drawer and the commit line agree on the gate */
   function gateProgress(g) {
     var d = 0; g.boxes.forEach(function (b) { if (b.checked) d++; });
     return { done: d, total: g.boxes.length };
@@ -478,7 +473,7 @@
     var next = nextStatusOf(job);
     if (next) {
       var T = data().TRANSITIONS[next];
-      var g = T ? gateByMatch(job, T.gate) : null;
+      var g = data().gateFor(job, next);   // the engine's own pick (review 2026-09-03)
       /* a gate with NO items gates nothing (SCHEMA (b): "Closeout → closed" has no
          checklist) — ready, never "Check all (0) & advance" (2822, 2026-09-03) */
       var ready = g ? (function () { var p = gateProgress(g); return p.total === 0 || p.done === p.total; })() : true;
@@ -817,8 +812,7 @@
   }
   /* gate state for the transition INTO status `to` */
   function hopGate(job, to) {
-    var T = data().TRANSITIONS[to];
-    var g = T ? gateByMatch(job, T.gate) : null;
+    var g = data().gateFor(job, to);   // the engine's own pick (review 2026-09-03)
     var p = g ? gateProgress(g) : null;
     var ready = p ? (p.total === 0 || p.done === p.total) : true;   // 0-item gate = cleared (engine rule)
     return { gate: g, progress: p, ready: ready };
@@ -939,8 +933,7 @@
     var next = nextStatusOf(job);
     var rows2 = "";
     if (next) {
-      var T = data().TRANSITIONS[next];
-      var g = T ? gateByMatch(job, T.gate) : null;
+      var g = data().gateFor(job, next);   // the engine's own pick (review 2026-09-03)
       var p = g ? gateProgress(g) : null;
       var ready = p ? (p.total === 0 || p.done === p.total) : true;   // 0-item gate = cleared (engine rule)
       if (demoSandbox || auth().canEdit(job, "status", { toStatus: next })) {
@@ -1161,8 +1154,7 @@
       app().toast && app().toast("Advancing with open gate items is a Brad/Dan move — it's committed with your name and reason.", "err");
       return;
     }
-    var T = data().TRANSITIONS[toStatus];
-    var g = T ? gateByMatch(job, T.gate) : null;
+    var g = data().gateFor(job, toStatus);   // the engine's own pick (review 2026-09-03)
     var open = g ? g.boxes.filter(function (b) { return !b.checked; }) : [];
     var fromPh = data().phaseOf(job.status), toPh = data().phaseOf(toStatus);
     var head = "<h3>" + esc("#" + job.jobNumber) + " · Advance with items open</h3>";
