@@ -479,7 +479,9 @@
     if (next) {
       var T = data().TRANSITIONS[next];
       var g = T ? gateByMatch(job, T.gate) : null;
-      var ready = g ? (function () { var p = gateProgress(g); return p.total > 0 && p.done === p.total; })() : true;
+      /* a gate with NO items gates nothing (SCHEMA (b): "Closeout → closed" has no
+         checklist) — ready, never "Check all (0) & advance" (2822, 2026-09-03) */
+      var ready = g ? (function () { var p = gateProgress(g); return p.total === 0 || p.done === p.total; })() : true;
       var canStat = can("status", { toStatus: next });
       var label = "Advance to " + (data().STAGE_LABELS[next] || next) + " →";
       if (canStat) {
@@ -818,7 +820,7 @@
     var T = data().TRANSITIONS[to];
     var g = T ? gateByMatch(job, T.gate) : null;
     var p = g ? gateProgress(g) : null;
-    var ready = p ? (p.total > 0 && p.done === p.total) : true;
+    var ready = p ? (p.total === 0 || p.done === p.total) : true;   // 0-item gate = cleared (engine rule)
     return { gate: g, progress: p, ready: ready };
   }
   /* what entering `st` ACTIVATES: the checklist gating the step OUT of `st` */
@@ -940,7 +942,7 @@
       var T = data().TRANSITIONS[next];
       var g = T ? gateByMatch(job, T.gate) : null;
       var p = g ? gateProgress(g) : null;
-      var ready = p ? (p.total > 0 && p.done === p.total) : true;
+      var ready = p ? (p.total === 0 || p.done === p.total) : true;   // 0-item gate = cleared (engine rule)
       if (demoSandbox || auth().canEdit(job, "status", { toStatus: next })) {
         rows2 += '<button class="fxc-mrow" id="fxc-mv-adv">Advance to ' + esc(stageLabel(next)) + " →" +
           (g && !ready ? '<span class="sub">' + (p.total - p.done) + " item" + (p.total - p.done === 1 ? "" : "s") +

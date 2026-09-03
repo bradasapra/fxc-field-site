@@ -532,6 +532,18 @@
           checked: (cb[2] === "x" || cb[2] === "X"),
           text: cb[3]
         });
+        continue;
+      }
+      /* an indented continuation line ("      expected; suggest …" — 2797 wraps
+         long items at ~100 cols) belongs to the box directly above it: joined
+         into the label for DISPLAY and the tick's commit line only. absLine stays
+         the checkbox line, so toggleGate still rewrites exactly one line. */
+      if (curGate && curGate.boxes.length && /^\s{2,}\S/.test(line) && !/^\s*[-*]\s/.test(line)) {
+        var lastBox = curGate.boxes[curGate.boxes.length - 1];
+        if (lastBox.absLine === i - 1 || lastBox.contLine === i - 1) {
+          lastBox.text += " " + line.trim();
+          lastBox.contLine = i;
+        }
       }
       // any other line (blank, prose) is ignored for gate purposes
     }
@@ -729,6 +741,16 @@
        SCHEMA's sqft is numeric — a sanctioned unit suffix or measure field is
        the vault-side fix; this is display tolerance, not a schema fork. */
     var measure = (sqftNum == null && sqftRaw) ? sqftRaw : "";
+    /* SCHEMA (d) 2026-09-02: `measure:` + `measure_unit:` is the sanctioned pair.
+       A non-sqft unit means NO area math (sqft stays 0, the pair displays verbatim
+       — "390 lnft", 2809); a sqft unit with a blank `sqft:` IS the area. Only read
+       when `sqft:` is blank — a numeric sqft stays the area (2805 carries both). */
+    var measureNum = toNum(get("measure"));
+    var measureUnit = fmStr(get("measure_unit")).toLowerCase();
+    if (sqftNum == null && !measure && measureNum != null) {
+      if (!measureUnit || measureUnit === "sqft") sqftNum = measureNum;
+      else measure = String(measureNum) + " " + measureUnit;
+    }
 
     var idxSections = parsedExtra.sectionLineIndex || {};
     var scopeText = parsedExtra.scopeText || "";
@@ -1030,7 +1052,9 @@
     var detail = data.displayLabel(m[3] || "");
     var gateName = "";
     (job._meta.gateIndex || []).forEach(function (g) {
-      g.boxes.forEach(function (b) { if (b.absLine === absLine) gateName = g.gateName; });
+      g.boxes.forEach(function (b) {
+        if (b.absLine === absLine) { gateName = g.gateName; if (b.contLine) detail = data.displayLabel(b.text); }
+      });
     });
     var action = wasChecked ? "uncheck" : "check";
     var msg = "[" + role() + "] " + action + " " + job.jobNumber + " — " +
@@ -1107,7 +1131,10 @@
         var total = matchG.boxes.length;
         var done = 0;
         matchG.boxes.forEach(function (b) { if (b.checked) done++; });
-        if (total === 0 || done < total) {
+        /* a gate with NO items gates nothing — SCHEMA (b) 2026-09-02: `closed`
+           follows warranty-issued with no checklist, and the template still writes
+           the "**Closeout** → closed" header. 0/0 is cleared, not blocked (2822). */
+        if (total > 0 && done < total) {
           throw new Error("setStatus: gate \"" + matchG.gateName + "\" is not fully checked (" + done + "/" + total + ") — finish this gate first");
         }
       }

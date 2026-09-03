@@ -461,6 +461,13 @@ const measureOf = j => j.measure || (j.sqft ? j.sqft.toLocaleString() + " sqft" 
 /* deposit_received is a DATE in SCHEMA, but records also carry a bare
    `true` (received, date unknown — 2809) — never print "received true" */
 const depositState = d => !d ? "— pending" : isISO(d) ? `received ${fmtDate(d)}` : /^true$/i.test(String(d)) ? "received (date to confirm)" : `received ${esc(String(d))}`;
+/* the Deposit row says what the record says: the amount when there is one, its
+   share of the quote COMPUTED (2769 is 10%, 2797 is 20% — never a hard-coded
+   "50%"), then the received state; no amount → just the state (was "— — pending").
+   The old "Balance: Due on completion · HST not included" line is gone: terms
+   differ per deal (2797's sub-terms) and the drawer says only what the record says. */
+const depositLine = m => (m.deposit ? money(m.deposit) + " " : "") + depositState(m.depositDate)
+  + (m.deposit && m.quote ? ` (${Math.round(m.deposit / m.quote * 100)}%)` : "");
 const mdi = s => esc(s)
   .replace(/\[\[([^\]|]*)(?:\|([^\]]*))?\]\]/g,(m,p,a)=>(a||p).trim())
   .replace(/\*\*([^*]+?)\*\*/g,"<b>$1</b>")
@@ -638,10 +645,22 @@ function toggleRoster(){
   render();
 }
 /* ---- material roll-up across the Upcoming column (Brad 06-12): sum the
-   "+25%" order column of every upcoming job's load list, grouped by product ---- */
+   "+25%" order column of every upcoming job's load list, grouped by product ----
+   Grammar (2026-09-03, the contract the fxc-pm materials session writes to): the
+   "+25%" cell reads "<number> <unit>" — unit = gal · L · lb · kit · pail · bag ·
+   box · roll · pc · drum · tin, singular or plural — or CONFIRM (counted apart,
+   never summed). A bare number is not a quantity (falls back to the "bring" cell);
+   "9 × 5-gal pails" is deliberately NOT read as 5 gal — the hyphenated size is
+   packaging, not the order quantity. */
+const MAT_UNITS = { gal:"gal", l:"L", lb:"lb", lbs:"lb", kit:"kit", kits:"kit", pail:"pail", pails:"pail",
+  bag:"bag", bags:"bag", box:"box", boxes:"box", roll:"roll", rolls:"roll", pc:"pc", pcs:"pc", piece:"pc", pieces:"pc",
+  drum:"drum", drums:"drum", tin:"tin", tins:"tin" };
 function matQty(s){
-  const m = String(s||"").match(/([\d.,]+)\s*(gal|lbs?|kits?|boxes?|L)\b/i);
-  return m ? { n: parseFloat(m[1].replace(/,/g,"")), unit: m[2].toLowerCase().replace(/s$/,"") } : null;
+  const m = String(s||"").match(/(?:^|[^\d.,-])([\d.,]+)\s*(gal|lbs?|kits?|pails?|bags?|box|boxes|rolls?|pcs?|pieces?|drums?|tins?|L)\b/i);
+  if(!m) return null;
+  const unit = MAT_UNITS[m[2].toLowerCase()];
+  const n = parseFloat(m[1].replace(/,/g,""));
+  return unit && isFinite(n) ? { n, unit } : null;
 }
 function matKey(name){
   const m = String(name).match(/\b(N?\d{3}[A-Z]{0,2})\b/);   // series number, e.g. 288 / 248 / N224
@@ -1042,7 +1061,7 @@ function docLinksHTML(j){
     return rows;
   }
   return `<span style="color:var(--ink-dim)">📄 ${esc(j.quoteDoc)}</span>
-    <a href="${esc(j.maps)}" target="_blank" rel="noopener">🗺️ Open in Google Maps</a>
+    ${j.maps?`<a href="${esc(j.maps)}" target="_blank" rel="noopener">🗺️ Open in Google Maps</a>`:""}
     <span style="color:var(--ink-dim)">🗂️ ${esc(j.jobFolder)}</span>
     <span style="color:var(--ink-faint)">💬 Discord job thread — to be created</span>`;
 }
@@ -1083,17 +1102,20 @@ function gateProgress(j){
 }
 function richDetail(j){
   const gates = gateProgress(j);
-  const phone = j.contact.phone.replace(/[^0-9]/g,"");
+  /* dialable only when the phone slot holds a real number — a "phone [confirm …]"
+     placeholder (2829) must not become tel:+10722 */
+  const digits = j.contact.phone.replace(/[^0-9]/g,"");
+  const phone = digits.length >= 7 ? digits : "";
   return `
     <div class="actions">
       ${phone?`<a href="tel:+1${phone}">☎️ Call ${esc(j.contact.name.split(" ")[0])}</a>`:""}
-      <a href="${esc(j.maps)}" target="_blank" rel="noopener">📍 Directions</a>
+      ${j.maps?`<a href="${esc(j.maps)}" target="_blank" rel="noopener">📍 Directions</a>`:""}
       ${j.contact.email?`<a href="mailto:${esc(j.contact.email)}">✉️ Email</a>`:""}
     </div>
     <div class="glance">
       <div class="g-line"><b>${esc(measureOf(j) || "no area on record")}</b> · ${esc(j.segment)} <span class="g-sys">${esc(j.system)}${j.systemDesc?(" · "+esc(j.systemDesc)):""}</span></div>
       <div class="g-grid">
-        <span>📍 <a href="${esc(j.maps)}" target="_blank" rel="noopener">${esc(j.address)}</a></span>
+        <span>📍 ${j.maps&&j.address?`<a href="${esc(j.maps)}" target="_blank" rel="noopener">${esc(j.address)}</a>`:`<span style="color:var(--ink-faint)">no address on record</span>`}</span>
         <span>👤 ${esc(j.contact.name)} · ${esc(j.contact.phone || j.contact.email || "")}</span>
         <span class="g-dates">🗓 Won <b>${fmtDate(j.dates.won)}</b> · client wants <b>${fmtDate(j.dates.requested)}</b> · start ${fmtDate(j.dates.start)} → ${fmtDate(j.dates.end)}</span>
       </div>
@@ -1120,8 +1142,7 @@ function richDetail(j){
     <h4>Quote</h4>
     <dl class="kv">
       <dt>Total</dt><dd><b>${money(j.money.quote)}</b> + HST</dd>
-      <dt>Deposit</dt><dd>${money(j.money.deposit)} ${depositState(j.money.depositDate)} (50%)</dd>
-      <dt>Balance</dt><dd>Due on completion · HST not included</dd>
+      <dt>Deposit</dt><dd>${depositLine(j.money)}</dd>
       ${j.money.billed!=null?`<dt>Billed</dt><dd><b>${money(j.money.billed)}</b> · ${deltaLabel(j.money.billed,j.money.quote)} <span class="note">(/variance)</span></dd>`:""}
     </dl>
     ${j.variance?`<h4>Variance (closeout)</h4>

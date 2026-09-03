@@ -262,10 +262,22 @@
     '.dcmoneyhead{font-size:9.5px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--fx2);}'
   ].join("");
 
+  /* NO FINANCIALS on the worker card (Brad 2026-07-02) — the money FIELDS were
+     removed then, but the vault also writes dollar amounts INSIDE Product-usage
+     cells (PJA costs, 2822 / 2800 / 2774), Material load list notes (2769) and
+     watch-outs (2835's "$785 line"). Below full scope every "$1,234" a card
+     renders is masked to "$—" at the escape boundary; Brad/Dan cards are untouched. */
+  var MONEY_RE = /\$\s?\d[\d,]*(?:\.\d+)?/g;
+  var MASK_MONEY = false;
+  function crewScope() {
+    var st = (root.FXC && root.FXC.state) || {};
+    return !(st.role && st.role.scope === "full");
+  }
   function esc(s) {
-    return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+    var out = String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
     });
+    return MASK_MONEY ? out.replace(MONEY_RE, "$—") : out;
   }
   function money(n) { return "$" + Number(n || 0).toLocaleString("en-US"); }
   function initials(name) {
@@ -327,6 +339,7 @@
   function tContact(job) {
     var c = job.contact || {};
     var tel = String(c.phone || "").replace(/[^\d+]/g, "");
+    if (tel.replace(/\D/g, "").length < 7) tel = "";   // "phone [confirm …]" placeholder (2829): no tel:0722
     return '<div class="tile span2" style="padding:12px 14px;">' +
       '<div class="tlabel"><span class="dot"></span>Site contact</div>' +
       '<div class="ctrow">' +
@@ -810,6 +823,8 @@
        write time (an iframe can't be trusted with its own identity). */
     var FX = root.FXC || {};
     var st = FX.state || {};
+    var full = !!(st.role && st.role.scope === "full");
+    if (!full) products = products.map(function (p) { return p.replace(MONEY_RE, "$—"); });
     return {
       seed: seed, areas: areas, products: products,
       spec: card.parseSpecLimits((job && job.conditions) || ""), queued: q,
@@ -1427,6 +1442,7 @@
 
   /* full standalone document — iframe srcdoc in-app, and the worker-link file */
   card.doc = function (job) {
+    MASK_MONEY = crewScope();
     return "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">" +
       "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">" +
       "<title>" + esc(job.jobNumber) + " — FX Field card</title><style>" + card.CSS + "</style></head><body>" +
