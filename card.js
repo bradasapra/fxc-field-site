@@ -546,6 +546,7 @@
 
   /* split "Headline (detail)" or "Headline — detail" into title + sub */
   function splitItem(text) {
+    text = String(text || "").replace(/<!--[\s\S]*?-->/g, "").replace(/\s{2,}/g, " ").trim(); // <!--auto:field--> is for skills, not crew
     var m = /^(.*?)\s*[—\-]\s*(.+)$/.exec(text) || /^(.*?)\s*\((.+)\)\s*$/.exec(text);
     if (m) return { t: m[1].trim(), s: m[2].trim() };
     return { t: text, s: "" };

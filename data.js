@@ -1007,6 +1007,14 @@
   }
 
   /* ---- toggleGate(job, absLine) : flip [ ]<->[x] on ONE line only ---- */
+  /* display label of a checkbox item: the vault's machine tags (`<!--auto:field-->`,
+     SCHEMA 2026-09-02) ride at the end of the line for the skills, never for a
+     human. Stripped for display and for commit lines only — the line itself keeps
+     them byte-for-byte (toggleGate rewrites the [ ] token and nothing else). */
+  data.displayLabel = function (text) {
+    return String(text == null ? "" : text).replace(/<!--[\s\S]*?-->/g, "").replace(/\s{2,}/g, " ").trim();
+  };
+
   data.toggleGate = function (job, absLine) {
     var lines = cloneLines(job);
     var line = lines[absLine];
@@ -1018,8 +1026,8 @@
     lines[absLine] = line.replace(/^(\s*-\s\[)( |x|X)(\])/, "$1" + newChar + "$3");
     bumpUpdated(job, lines);
 
-    // find which gate/item this box belongs to (for the commit detail)
-    var detail = m[3] || "";
+    // find which gate/item this box belongs to (for the commit detail) — label only, no machine tag
+    var detail = data.displayLabel(m[3] || "");
     var gateName = "";
     (job._meta.gateIndex || []).forEach(function (g) {
       g.boxes.forEach(function (b) { if (b.absLine === absLine) gateName = g.gateName; });

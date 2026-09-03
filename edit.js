@@ -33,6 +33,9 @@
     var ph = job.phase || (data().phaseOf ? data().phaseOf(job.status) : "1-planning");
     return PHASE_GROUP[ph] || "Planning";
   }
+  /* a box's human label — the engine strips the vault's <!--auto:field--> tags; the
+     raw text stays on data-text so the tap still matches its vault line */
+  function lbl(t) { var D = data(); return (D && D.displayLabel) ? D.displayLabel(t) : String(t == null ? "" : t); }
 
   /* Which gate reveals are expanded, keyed by job id. Every gate toggle re-renders
      the drawer (openJob), so this persists the open state across that rebuild —
@@ -75,6 +78,9 @@
       ".fxc-gatehead .pct.now{color:var(--accent);font-weight:800}" +
       ".fxc-reveal{display:none}" +
       ".fxc-reveal.open{display:block}" +
+      ".fxc-gatehead.fxc-phasehead{margin-top:18px}" +
+      ".fxc-gatehead.fxc-phasehead .gname{color:var(--ink-faint)}" +
+      ".fxc-reveal.fxc-phasebody{padding-left:6px;border-left:2px solid var(--line);margin-bottom:4px}" +
       ".fxc-btn{width:100%;padding:13px 14px;border:none;border-radius:10px;background:var(--accent);color:#10140f;font-weight:800;font-size:15px;cursor:pointer;margin-top:6px}" +
       ".fxc-btn:disabled{background:var(--panel2);color:var(--ink-faint);border:1px solid var(--line);cursor:not-allowed}" +
       ".fxc-btn.sec{background:var(--panel2);color:var(--ink);border:1px solid var(--line)}" +
@@ -377,48 +383,78 @@
     if (demoRich) html += '<div class="fxc-note-banner" style="margin-bottom:12px">Preview of the real #' + esc(job.jobNumber) + ' record — tap anything; changes apply here only, nothing is saved.</div>';
     if (offline) html += '<div class="fxc-note-banner" style="margin-bottom:12px">Offline — showing last synced data. Readings, batches and notes still save; they queue here and sync when signal returns.</div>';
 
-    /* ---- current-phase gate checklist ----
-       (offline snapshot jobs carry no _meta — the gate index is simply absent) */
+    /* ---- gate checklists — every phase, in vault order ----
+       (offline snapshot jobs carry no _meta — the gate index is simply absent)
+       Brad 2026-09-03: "the job card blocks you from seeing the next stage's
+       checkpoints until you finish this stage." Phases BEHIND the job fold up as
+       "Done ·" (still tickable — owed items can be closed late), the CURRENT phase
+       is open as before, phases AHEAD fold up as "Ahead ·" and are read-only:
+       the checklist ahead is for reading, never pre-ticking (SCHEMA: closeout
+       items are never pre-checked). */
     var phaseName = currentPhaseName(job);
-    var phaseGates = ((job._meta && job._meta.gateIndex) || []).filter(function (g) { return g.phase === phaseName; });
-    if (phaseGates.length) {
-      html += "<h4>" + esc(phaseName) + " checklist</h4>";
-      var nextSt = nextStatusOf(job), jobIdx = chainIndex(job.status);
-      phaseGates.forEach(function (g, gi) {
-        var pr = gateProgress(g);
-        var canGate = can("gate", { gatePhase: g.phase });
-        /* where the job stands vs this gate (Brad 2026-09-02: "after I advanced
-           through gate 3 it doesn't reset") — a gate the status has already
-           passed reads "passed · N open" (pushed through, items still owed) or
-           "cleared"; the gate gating the NEXT step is marked "now". Boxes stay
-           tickable either way. */
-        var tIdx = g.statusTarget ? chainIndex(g.statusTarget) : -1;
-        var passed = tIdx > -1 && jobIdx > -1 && jobIdx >= tIdx;
-        var isNow = !!(nextSt && g.statusTarget === nextSt);
-        var openN = pr.total - pr.done;
-        var badge = passed
-          ? (openN ? '<span class="pct passed">passed · ' + openN + " open</span>" : '<span class="pct cleared">cleared</span>')
-          : '<span class="pct' + (isNow ? " now" : "") + '">' + pr.done + "/" + pr.total + (isNow ? " · now" : "") + "</span>";
-        var row = function (b) {
-          return '<div class="fxc-gaterow ' + (b.checked ? "on" : "") + (canGate ? "" : " ro") + '"' +
-            (canGate ? ' data-toggle="1" data-gate="' + esc(g.gateName) + '" data-text="' + esc(b.text) + '"' : "") + ">" +
-            '<span class="box">' + (b.checked ? "✓" : "") + "</span>" +
-            '<span class="lbl">' + esc(b.text) + "</span></div>";
-        };
-        /* Brad 2026-07-03: the WHOLE checklist (checked and open alike) collapses
-           behind the count — tap "3/4" to reveal. Boxes render in vault order and
-           stay put when checked; no regrouping. (Supersedes 2026-07-02 checked-
-           boxes-visible layout, which made items jump to the top on check.) */
-        var hasBoxes = g.boxes.length > 0;
-        var isOpen = hasBoxes && !!revealState(job.id)[g.gateName];
-        html += '<div class="fxc-gatehead' + (hasBoxes ? " more" : "") + (isOpen ? " exp" : "") + '"' +
-          (hasBoxes ? ' data-reveal="fxc-gopen-' + gi + '" data-gate="' + esc(g.gateName) + '"' : "") + ">" +
-          '<span class="gname">' + esc(g.gateName) + "</span>" + badge + "</div>";
-        if (hasBoxes) {
-          html += '<div class="fxc-reveal' + (isOpen ? " open" : "") + '" id="fxc-gopen-' + gi + '">';
-          g.boxes.forEach(function (b) { html += row(b); });
-          html += "</div>";
+    var allGates = ((job._meta && job._meta.gateIndex) || []);
+    var nextSt = nextStatusOf(job), jobIdx = chainIndex(job.status);
+    /* one gate = header (with the where-the-job-stands badge) + its boxes behind a reveal */
+    var gateBlock = function (g, key, tickable) {
+      var pr = gateProgress(g);
+      var canGate = tickable && can("gate", { gatePhase: g.phase });
+      /* where the job stands vs this gate (Brad 2026-09-02: "after I advanced
+         through gate 3 it doesn't reset") — a gate the status has already
+         passed reads "passed · N open" (pushed through, items still owed) or
+         "cleared"; the gate gating the NEXT step is marked "now". Boxes stay
+         tickable either way (inside a reachable phase). */
+      var tIdx = g.statusTarget ? chainIndex(g.statusTarget) : -1;
+      var passed = tIdx > -1 && jobIdx > -1 && jobIdx >= tIdx;
+      var isNow = !!(nextSt && g.statusTarget === nextSt);
+      var openN = pr.total - pr.done;
+      var badge = passed
+        ? (openN ? '<span class="pct passed">passed · ' + openN + " open</span>" : '<span class="pct cleared">cleared</span>')
+        : '<span class="pct' + (isNow ? " now" : "") + '">' + pr.done + "/" + pr.total + (isNow ? " · now" : "") + "</span>";
+      var row = function (b) {
+        return '<div class="fxc-gaterow ' + (b.checked ? "on" : "") + (canGate ? "" : " ro") + '"' +
+          (canGate ? ' data-toggle="1" data-gate="' + esc(g.gateName) + '" data-text="' + esc(b.text) + '"' : "") + ">" +
+          '<span class="box">' + (b.checked ? "✓" : "") + "</span>" +
+          '<span class="lbl">' + esc(lbl(b.text)) + "</span></div>";
+      };
+      /* Brad 2026-07-03: the WHOLE checklist (checked and open alike) collapses
+         behind the count — tap "3/4" to reveal. Boxes render in vault order and
+         stay put when checked; no regrouping. (Supersedes 2026-07-02 checked-
+         boxes-visible layout, which made items jump to the top on check.) */
+      var hasBoxes = g.boxes.length > 0;
+      var isOpen = hasBoxes && !!revealState(job.id)[g.gateName];
+      var out = '<div class="fxc-gatehead' + (hasBoxes ? " more" : "") + (isOpen ? " exp" : "") + '"' +
+        (hasBoxes ? ' data-reveal="fxc-gopen-' + key + '" data-gate="' + esc(g.gateName) + '"' : "") + ">" +
+        '<span class="gname">' + esc(g.gateName) + "</span>" + badge + "</div>";
+      if (hasBoxes) {
+        out += '<div class="fxc-reveal' + (isOpen ? " open" : "") + '" id="fxc-gopen-' + key + '">';
+        g.boxes.forEach(function (b) { out += row(b); });
+        out += "</div>";
+      }
+      return out;
+    };
+    if (allGates.length) {
+      var ORDER = ["Planning", "Active", "Closeout"];
+      var curIdx = ORDER.indexOf(phaseName);
+      ORDER.forEach(function (ph) {
+        var gs = allGates.filter(function (g) { return g.phase === ph; });
+        if (!gs.length) return;                       // backfilled records fold empty phases away
+        if (ph === phaseName) {
+          html += "<h4>" + esc(phaseName) + " checklist</h4>";
+          gs.forEach(function (g, gi) { html += gateBlock(g, ph + "-" + gi, true); });
+          return;
         }
+        var ahead = ORDER.indexOf(ph) > curIdx;
+        var tot = 0, done = 0;
+        gs.forEach(function (g) { var p = gateProgress(g); tot += p.total; done += p.done; });
+        var pkey = "__phase:" + ph;
+        var pOpen = !!revealState(job.id)[pkey];
+        html += '<div class="fxc-gatehead more fxc-phasehead' + (pOpen ? " exp" : "") + '" data-reveal="fxc-gphase-' + ph + '" data-gate="' + pkey + '">' +
+          '<span class="gname">' + (ahead ? "Ahead · " : "Done · ") + esc(ph) + " checklist</span>" +
+          '<span class="pct' + (!ahead && done === tot ? " cleared" : "") + '">' + gs.length + " gate" + (gs.length === 1 ? "" : "s") + " · " +
+          (ahead ? tot + " item" + (tot === 1 ? "" : "s") : (tot - done) + " open") + "</span></div>";
+        html += '<div class="fxc-reveal fxc-phasebody' + (pOpen ? " open" : "") + '" id="fxc-gphase-' + ph + '">';
+        gs.forEach(function (g, gi) { html += gateBlock(g, ph + "-" + gi, !ahead); });
+        html += "</div>";
       });
     }
 
@@ -1149,6 +1185,14 @@
       var target = hit || document.querySelector("#drawer .fxc-edit") || document.querySelector("#drawer");
       if (target && target.scrollIntoView) target.scrollIntoView({ behavior: "smooth", block: "start" });
       if (hit) {
+        // a gate inside a folded "Done ·" / "Ahead ·" phase block (2026-09-03) is hidden
+        // until its block opens — open it first, and remember it like any reveal
+        var body = hit.closest ? hit.closest(".fxc-phasebody") : null;
+        if (body && !body.classList.contains("open")) {
+          body.classList.add("open");
+          var ph = document.querySelector('#drawer [data-reveal="' + body.id + '"]');
+          if (ph) { ph.classList.add("exp"); revealState(job.id)[ph.getAttribute("data-gate")] = true; }
+        }
         hit.classList.add("flash"); setTimeout(function () { hit.classList.remove("flash"); }, 1600);
         // reveal the open items so the jumped-to gate is actionable, and remember it
         if (hit.classList.contains("more")) {
