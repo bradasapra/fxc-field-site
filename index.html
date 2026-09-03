@@ -142,8 +142,11 @@
   .cols > .col{min-width:0}
   /* Σ material roll-up under Upcoming */
   .mat-sum{margin-top:10px;border:1px solid var(--line);border-left:3px solid var(--fx-purple,#7A5896);border-radius:9px;background:var(--panel2);font-size:12px}
-  .mat-sum table{table-layout:fixed}
-  .mat-sum td{overflow-wrap:break-word}
+  /* contained in its column: the generic Table-view rule below sets table{min-width:820px},
+     which sent these rows across the whole board (Brad 2026-09-03) */
+  .mat-sum table{table-layout:fixed;min-width:0;max-width:100%}
+  .mat-sum td{overflow-wrap:anywhere;vertical-align:top}
+  .mat-sum tbody tr{cursor:default}
   .mat-sum .msq{width:84px}
   .mat-sum summary{cursor:pointer;padding:9px 11px;font-weight:700;color:var(--ink)}
   .mat-sum .ms-n{float:right;color:var(--ink-faint);font-weight:600;font-size:11px}
