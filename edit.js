@@ -834,7 +834,9 @@
   var TRIGGER_PLANS = {
     "package-building": ["create the job's Discord thread", "set the Google Calendar placeholder", "create the Exaktime location"],
     "scheduled": ["firm up the Calendar event", "draft the client confirmation message (start date) for your approval"],
-    "cleared-to-deploy": ["post the loading checklist to the Discord thread", "set day-before + 7-day reminders"],
+    /* "set day-before + 7-day reminders" removed 2026-09-03 (Brad: nobody sets them today; the
+       Nudge/Scheduler upgrade owns them later — fxc-0 roadmap item 8) */
+    "cleared-to-deploy": ["post the loading checklist to the Discord thread"],
     "deployed": ["set start_date to today + move the Calendar event to match (deploying = the job starts)", "post 'job starting' in the Discord thread and tag the assigned crew", "text the client: job is active, crew arriving today/tomorrow, start time to follow"],
     "invoicing": ["send the invoice details to the bookkeeper to invoice out", "prompt the crew for the product-usage sheet"],
     "pja-pending": ["kick off the PJA — hand actuals (hours, product, diesel) to Airtable"],
