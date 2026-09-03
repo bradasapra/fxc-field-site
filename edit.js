@@ -81,6 +81,12 @@
       ".fxc-gatehead.fxc-phasehead{margin-top:18px}" +
       ".fxc-gatehead.fxc-phasehead .gname{color:var(--ink-faint)}" +
       ".fxc-reveal.fxc-phasebody{padding-left:6px;border-left:2px solid var(--line);margin-bottom:4px}" +
+      /* "Ahead ·" glance (Brad 2026-09-03): every gate + item visible at once, ~40% smaller rows */
+      ".fxc-phasebody.mini .fxc-gmini{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;font-weight:700;color:var(--ink-dim);margin:9px 0 4px;padding:0 2px}" +
+      ".fxc-phasebody.mini .fxc-gmini .to{flex:none;font-weight:600;color:var(--ink-faint);font-variant-numeric:tabular-nums}" +
+      ".fxc-phasebody.mini .fxc-gaterow{padding:5px 8px;min-height:0;margin-bottom:4px;gap:8px;border-radius:7px}" +
+      ".fxc-phasebody.mini .fxc-gaterow .box{width:14px;height:14px;border-width:1.5px;border-radius:4px;font-size:10px}" +
+      ".fxc-phasebody.mini .fxc-gaterow .lbl{font-size:11.5px;line-height:1.3;padding-top:0}" +
       ".fxc-btn{width:100%;padding:13px 14px;border:none;border-radius:10px;background:var(--accent);color:#10140f;font-weight:800;font-size:15px;cursor:pointer;margin-top:6px}" +
       ".fxc-btn:disabled{background:var(--panel2);color:var(--ink-faint);border:1px solid var(--line);cursor:not-allowed}" +
       ".fxc-btn.sec{background:var(--panel2);color:var(--ink);border:1px solid var(--line)}" +
@@ -395,7 +401,7 @@
     var allGates = ((job._meta && job._meta.gateIndex) || []);
     var nextSt = nextStatusOf(job), jobIdx = chainIndex(job.status);
     /* one gate = header (with the where-the-job-stands badge) + its boxes behind a reveal */
-    var gateBlock = function (g, key, tickable) {
+    var gateBlock = function (g, key, tickable, mini) {
       var pr = gateProgress(g);
       var canGate = tickable && can("gate", { gatePhase: g.phase });
       /* where the job stands vs this gate (Brad 2026-09-02: "after I advanced
@@ -421,6 +427,15 @@
          stay put when checked; no regrouping. (Supersedes 2026-07-02 checked-
          boxes-visible layout, which made items jump to the top on check.) */
       var hasBoxes = g.boxes.length > 0;
+      if (mini) {
+        /* "Ahead ·" glance (Brad 2026-09-03: "see all the gates and their checklists at
+           one dropdown at a quick glance, 25–50% smaller"): gate title + every item, no
+           per-gate reveal; read-only by construction (tickable is false for phases ahead) */
+        var to = g.statusTarget ? '<span class="to">→ ' + esc(stageLabel(g.statusTarget)) + "</span>" : "";
+        var mo = '<div class="fxc-gmini"><span>' + esc(g.gateName) + "</span>" + to + "</div>";
+        g.boxes.forEach(function (b) { mo += row(b); });
+        return mo;
+      }
       var isOpen = hasBoxes && !!revealState(job.id)[g.gateName];
       var out = '<div class="fxc-gatehead' + (hasBoxes ? " more" : "") + (isOpen ? " exp" : "") + '"' +
         (hasBoxes ? ' data-reveal="fxc-gopen-' + key + '" data-gate="' + esc(g.gateName) + '"' : "") + ">" +
@@ -452,8 +467,8 @@
           '<span class="gname">' + (ahead ? "Ahead · " : "Done · ") + esc(ph) + " checklist</span>" +
           '<span class="pct' + (!ahead && done === tot ? " cleared" : "") + '">' + gs.length + " gate" + (gs.length === 1 ? "" : "s") + " · " +
           (ahead ? tot + " item" + (tot === 1 ? "" : "s") : (tot - done) + " open") + "</span></div>";
-        html += '<div class="fxc-reveal fxc-phasebody' + (pOpen ? " open" : "") + '" id="fxc-gphase-' + ph + '">';
-        gs.forEach(function (g, gi) { html += gateBlock(g, ph + "-" + gi, !ahead); });
+        html += '<div class="fxc-reveal fxc-phasebody' + (ahead ? " mini" : "") + (pOpen ? " open" : "") + '" id="fxc-gphase-' + ph + '">';
+        gs.forEach(function (g, gi) { html += gateBlock(g, ph + "-" + gi, !ahead, ahead); });
         html += "</div>";
       });
     }
