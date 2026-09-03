@@ -154,6 +154,8 @@
   .mat-sum td{padding:6px 11px;border-top:1px solid var(--line);color:var(--ink)}
   .mat-sum .msq{text-align:right;white-space:nowrap}
   .mat-sum .ms-per td{padding:0 11px 7px;border-top:0;font-size:10.5px;color:var(--ink-faint)}
+  .mat-sum .ms-name{font-weight:600}
+  .mat-sum .ms-tot{color:var(--ink);font-size:12px}
   .ms-empty{color:var(--ink-faint);font-style:italic}
   .ms-flag{padding:6px 11px;color:#a05a00;background:rgba(227,160,8,.12);border-top:1px solid var(--line);font-size:11px;font-weight:600}
   .ms-note{padding:7px 11px;color:var(--ink-faint);font-size:10.5px;border-top:1px solid var(--line)}
@@ -654,7 +656,9 @@ function toggleRoster(){
    box · roll · pc · drum · tin, singular or plural — or CONFIRM (counted apart,
    never summed). A bare number is not a quantity (falls back to the "bring" cell);
    "9 × 5-gal pails" is deliberately NOT read as 5 gal — the hyphenated size is
-   packaging, not the order quantity. */
+   packaging, not the order quantity. Bulk-media rows may append a purchasable-unit
+   conversion after the quantity — "389.8 lb (9.75 box)" — only the FIRST quantity
+   is read (vault SCHEMA, 2026-09-03). */
 const MAT_UNITS = { gal:"gal", l:"L", lb:"lb", lbs:"lb", kit:"kit", kits:"kit", pail:"pail", pails:"pail",
   bag:"bag", bags:"bag", box:"box", boxes:"box", roll:"roll", rolls:"roll", pc:"pc", pcs:"pc", piece:"pc", pieces:"pc",
   drum:"drum", drums:"drum", tin:"tin", tins:"tin" };
@@ -684,20 +688,27 @@ function upcomingMaterials(jobs){
       if(!q) return;
       const key = matKey(r[0]);
       const id = key+"|"+q.unit;
-      const cur = totals.get(id) || { key, unit:q.unit, n:0, name:String(r[0]).split(" - ")[0].trim(), per:[] };
+      const cur = totals.get(id) || { key, unit:q.unit, n:0, name:String(r[0]).split(" - ")[0].trim(), byJob:new Map(), per:[] };
       cur.n += q.n;
-      cur.per.push(`#${j.jobNumber||j.id} ${q.n} ${q.unit}`);
+      const jn = j.jobNumber||j.id;   // several rows of one product on the same job → ONE figure (Brad 09-03)
+      cur.byJob.set(jn, (cur.byJob.get(jn)||0) + q.n);
       totals.set(id, cur);
     });
   });
-  return { totals:[...totals.values()], covered, missing, confirms, count: jobs.length };
+  const out = [...totals.values()].map(t=>{ t.per = [...t.byJob].map(([jn,n])=>`#${jn} ${matFmt(n)} ${t.unit}`); return t; });
+  return { totals:out, covered, missing, confirms, count: jobs.length };
 }
+function matFmt(n){ return String(Math.round(n*100)/100); }   // 27.25 gal · 0.38 box — same rounding for total + per-job
 function matSummaryHTML(jobs){
   const s = upcomingMaterials(jobs);
   if(!s.count) return "";
   const rows = s.totals.length
-    ? s.totals.map(t=>`<tr title="${esc(t.per.join(" · "))}"><td>${esc(t.name)}</td><td class="msq"><b>${Math.round(t.n*10)/10} ${esc(t.unit)}</b></td></tr>
-        <tr class="ms-per"><td colspan="2">${esc(t.per.join(" · "))}</td></tr>`).join("")
+    ? s.totals.map(t=>{
+        /* total first, then the job breakdown (Brad 09-03); a single contributing job shows just its number */
+        const per = t.per.length===1 ? t.per[0].split(" ")[0] : t.per.join(" · ");
+        return `<tr title="${esc(t.per.join(" · "))}"><td colspan="2" class="ms-name">${esc(t.name)}</td></tr>
+        <tr class="ms-per"><td colspan="2"><b class="ms-tot">${matFmt(t.n)} ${esc(t.unit)}</b> · ${esc(per)}</td></tr>`;
+      }).join("")
     : `<tr><td colspan="2" class="ms-empty">No load lists in Upcoming yet.</td></tr>`;
   const flags =
     (s.missing.length ? `<div class="ms-flag">⚑ no load list yet: ${s.missing.map(j=>esc("#"+(j.jobNumber||j.id))).join(", ")}</div>` : "") +
